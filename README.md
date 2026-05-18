@@ -17,6 +17,12 @@ npm run dev
 
 Open the URL printed by Vite. Click inside the scene to lock the pointer, use WASD to move, and drag the mouse to look around.
 
+## Controls
+
+- View mode: click `进入画廊`, move with `WASD`, sprint with `Shift`, and jump with `Space`.
+- Edit mode: select an artwork from the list or click a frame in the scene, then adjust wall, horizontal position, height, and width from the side panel.
+- Frame layouts are saved in the browser and survive refreshes.
+
 ## Supabase Storage
 
 Copy `.env.example` to `.env.local` and fill in:

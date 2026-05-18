@@ -67,6 +67,24 @@ button {
   backdrop-filter: blur(12px);
 }
 
+.edit-badge {
+  position: absolute;
+  left: 24px;
+  bottom: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 42px;
+  padding: 0 14px;
+  border: 1px solid rgba(246, 196, 83, 0.42);
+  border-radius: 6px;
+  color: #fff3c7;
+  background: rgba(34, 28, 20, 0.76);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
+  font-weight: 800;
+}
+
 .control-panel {
   display: flex;
   flex-direction: column;
@@ -119,6 +137,32 @@ h1 {
 .status.online {
   color: #0f5132;
   background: #d8f3df;
+}
+
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #e3d8c8;
+}
+
+.mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 38px;
+  border-radius: 6px;
+  color: #5f5346;
+  background: transparent;
+  font-weight: 800;
+}
+
+.mode-switch button.active {
+  color: #fffaf0;
+  background: #332b24;
 }
 
 .upload-dropzone {
@@ -190,6 +234,13 @@ h1 {
   font-weight: 800;
 }
 
+.tool-button.secondary {
+  width: 100%;
+  flex: none;
+  color: #332b24;
+  background: #e3d8c8;
+}
+
 .icon-button {
   width: 42px;
   color: #332b24;
@@ -210,6 +261,54 @@ h1 {
   background: rgba(255, 255, 255, 0.52);
   font-size: 0.86rem;
   line-height: 1.45;
+}
+
+.editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid rgba(75, 62, 48, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.editor-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: #211b15;
+  font-weight: 900;
+}
+
+.editor-heading span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  color: #56493b;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.field select {
+  width: 100%;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid rgba(75, 62, 48, 0.2);
+  border-radius: 6px;
+  color: #211b15;
+  background: #fbf7ef;
+}
+
+.field input[type="range"] {
+  width: 100%;
+  accent-color: #332b24;
 }
 
 .collection-header {
@@ -238,11 +337,17 @@ h1 {
   border: 1px solid rgba(75, 62, 48, 0.14);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
 }
 
 .image-item.muted {
   grid-template-columns: 56px minmax(0, 1fr);
   opacity: 0.72;
+}
+
+.image-item.selected {
+  border-color: rgba(246, 196, 83, 0.95);
+  box-shadow: 0 0 0 2px rgba(246, 196, 83, 0.18);
 }
 
 .image-item img {

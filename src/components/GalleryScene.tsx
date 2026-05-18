@@ -1,11 +1,21 @@
 import { PointerLockControls } from "@react-three/drei";
-import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
+import { Canvas, ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
-import type { GalleryImage } from "../types";
+import type {
+  AppMode,
+  GalleryFrameLayout,
+  GalleryImage,
+  GalleryLayouts,
+  GalleryWall,
+} from "../types";
 
 interface GallerySceneProps {
   images: GalleryImage[];
+  layouts: GalleryLayouts;
+  mode: AppMode;
+  selectedImageId: string | null;
+  onSelectImage: (id: string) => void;
 }
 
 const room = {
@@ -14,37 +24,72 @@ const room = {
   height: 5.2,
 };
 
-const frameSlots = [
-  { position: [-5.8, 2.45, -10.84], rotation: [0, 0, 0] },
-  { position: [0, 2.45, -10.84], rotation: [0, 0, 0] },
-  { position: [5.8, 2.45, -10.84], rotation: [0, 0, 0] },
-  { position: [-8.84, 2.45, -5.8], rotation: [0, Math.PI / 2, 0] },
-  { position: [-8.84, 2.45, 0], rotation: [0, Math.PI / 2, 0] },
-  { position: [-8.84, 2.45, 5.8], rotation: [0, Math.PI / 2, 0] },
-  { position: [8.84, 2.45, -5.8], rotation: [0, -Math.PI / 2, 0] },
-  { position: [8.84, 2.45, 0], rotation: [0, -Math.PI / 2, 0] },
-  { position: [8.84, 2.45, 5.8], rotation: [0, -Math.PI / 2, 0] },
-  { position: [-5.8, 2.45, 10.84], rotation: [0, Math.PI, 0] },
-  { position: [0, 2.45, 10.84], rotation: [0, Math.PI, 0] },
-  { position: [5.8, 2.45, 10.84], rotation: [0, Math.PI, 0] },
-] satisfies Array<{
-  position: [number, number, number];
-  rotation: [number, number, number];
-}>;
+const eyeHeight = 1.75;
+const wallInset = 0.16;
 
-function PlayerMovement() {
+const wallMounts = {
+  north: { position: [0, 0, -room.depth / 2 + wallInset], rotation: [0, 0, 0] },
+  south: { position: [0, 0, room.depth / 2 - wallInset], rotation: [0, Math.PI, 0] },
+  west: { position: [-room.width / 2 + wallInset, 0, 0], rotation: [0, Math.PI / 2, 0] },
+  east: { position: [room.width / 2 - wallInset, 0, 0], rotation: [0, -Math.PI / 2, 0] },
+} satisfies Record<
+  GalleryWall,
+  {
+    position: [number, number, number];
+    rotation: [number, number, number];
+  }
+>;
+
+const defaultLayouts = [
+  { wall: "north", offset: -5.8, height: 2.45 },
+  { wall: "north", offset: 0, height: 2.45 },
+  { wall: "north", offset: 5.8, height: 2.45 },
+  { wall: "west", offset: -5.8, height: 2.45 },
+  { wall: "west", offset: 0, height: 2.45 },
+  { wall: "west", offset: 5.8, height: 2.45 },
+  { wall: "east", offset: -5.8, height: 2.45 },
+  { wall: "east", offset: 0, height: 2.45 },
+  { wall: "east", offset: 5.8, height: 2.45 },
+  { wall: "south", offset: -5.8, height: 2.45 },
+  { wall: "south", offset: 0, height: 2.45 },
+  { wall: "south", offset: 5.8, height: 2.45 },
+] satisfies Array<Omit<GalleryFrameLayout, "width">>;
+
+function defaultWidthFor(image: GalleryImage) {
+  const aspect = image.width / image.height || 1.42;
+  return Math.min(3.4, Math.max(2.15, aspect * 2.15));
+}
+
+export function getDefaultLayout(image: GalleryImage, index: number): GalleryFrameLayout {
+  return {
+    ...defaultLayouts[index % defaultLayouts.length],
+    width: defaultWidthFor(image),
+  };
+}
+
+function PlayerMovement({ enabled }: { enabled: boolean }) {
   const { camera } = useThree();
   const keys = useRef(new Set<string>());
+  const verticalVelocity = useRef(0);
+  const isGrounded = useRef(true);
   const velocity = useMemo(() => new THREE.Vector3(), []);
   const direction = useMemo(() => new THREE.Vector3(), []);
   const forward = useMemo(() => new THREE.Vector3(), []);
   const right = useMemo(() => new THREE.Vector3(), []);
 
   useEffect(() => {
-    camera.position.set(0, 1.75, 7);
+    camera.position.set(0, eyeHeight, 7);
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        event.preventDefault();
+      }
       keys.current.add(event.code);
+
+      if (enabled && event.code === "Space" && isGrounded.current) {
+        verticalVelocity.current = 5.4;
+        isGrounded.current = false;
+      }
     };
     const onKeyUp = (event: KeyboardEvent) => {
       keys.current.delete(event.code);
@@ -57,9 +102,13 @@ function PlayerMovement() {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [camera]);
+  }, [camera, enabled]);
 
   useFrame((_, delta) => {
+    if (!enabled) {
+      return;
+    }
+
     direction.set(0, 0, 0);
 
     if (keys.current.has("KeyW") || keys.current.has("ArrowUp")) {
@@ -75,27 +124,36 @@ function PlayerMovement() {
       direction.x += 1;
     }
 
-    if (direction.lengthSq() === 0) {
-      return;
+    if (direction.lengthSq() > 0) {
+      const speed = keys.current.has("ShiftLeft") || keys.current.has("ShiftRight") ? 7.1 : 4.2;
+
+      direction.normalize();
+      camera.getWorldDirection(forward);
+      forward.y = 0;
+      forward.normalize();
+      right.crossVectors(forward, camera.up).normalize();
+
+      velocity
+        .set(0, 0, 0)
+        .addScaledVector(forward, -direction.z)
+        .addScaledVector(right, direction.x)
+        .normalize()
+        .multiplyScalar(speed * delta);
+
+      camera.position.add(velocity);
     }
 
-    direction.normalize();
-    camera.getWorldDirection(forward);
-    forward.y = 0;
-    forward.normalize();
-    right.crossVectors(forward, camera.up).normalize();
+    verticalVelocity.current -= 13.5 * delta;
+    camera.position.y += verticalVelocity.current * delta;
 
-    velocity
-      .set(0, 0, 0)
-      .addScaledVector(forward, -direction.z)
-      .addScaledVector(right, direction.x)
-      .normalize()
-      .multiplyScalar(4.2 * delta);
+    if (camera.position.y <= eyeHeight) {
+      camera.position.y = eyeHeight;
+      verticalVelocity.current = 0;
+      isGrounded.current = true;
+    }
 
-    camera.position.add(velocity);
     camera.position.x = THREE.MathUtils.clamp(camera.position.x, -7.5, 7.5);
     camera.position.z = THREE.MathUtils.clamp(camera.position.z, -9.5, 9.5);
-    camera.position.y = 1.75;
   });
 
   return null;
@@ -143,11 +201,23 @@ function Wall({
   );
 }
 
-function Artwork({ image, slotIndex }: { image: GalleryImage; slotIndex: number }) {
-  const slot = frameSlots[slotIndex % frameSlots.length];
+function Artwork({
+  image,
+  layout,
+  isSelected,
+  isEditable,
+  onSelect,
+}: {
+  image: GalleryImage;
+  layout: GalleryFrameLayout;
+  isSelected: boolean;
+  isEditable: boolean;
+  onSelect: () => void;
+}) {
+  const mount = wallMounts[layout.wall];
   const texture = useLoader(THREE.TextureLoader, image.url);
   const aspect = image.width / image.height || 1.42;
-  const width = Math.min(3.4, Math.max(2.15, aspect * 2.15));
+  const width = layout.width;
   const height = width / aspect;
 
   useMemo(() => {
@@ -155,49 +225,82 @@ function Artwork({ image, slotIndex }: { image: GalleryImage; slotIndex: number 
     texture.anisotropy = 8;
   }, [texture]);
 
+  function handleClick(event: ThreeEvent<MouseEvent>) {
+    if (!isEditable) {
+      return;
+    }
+
+    event.stopPropagation();
+    onSelect();
+  }
+
   return (
-    <group position={slot.position} rotation={slot.rotation}>
-      <mesh position={[0, 0, 0.05]} castShadow>
-        <boxGeometry args={[width + 0.34, height + 0.34, 0.12]} />
-        <meshStandardMaterial color="#2f2a22" roughness={0.45} />
-      </mesh>
-      <mesh position={[0, 0, 0.13]}>
-        <planeGeometry args={[width + 0.1, height + 0.1]} />
-        <meshStandardMaterial color="#f7f1e4" roughness={0.72} />
-      </mesh>
-      <mesh position={[0, 0, 0.2]}>
-        <planeGeometry args={[width, height]} />
-        <meshBasicMaterial map={texture} toneMapped={false} />
-      </mesh>
-      <pointLight position={[0, 1.35, 0.45]} intensity={0.55} distance={4.2} color="#fff6df" />
+    <group position={mount.position} rotation={mount.rotation}>
+      <group position={[layout.offset, layout.height, 0]}>
+        {isSelected ? (
+          <mesh position={[0, 0, 0.015]}>
+            <planeGeometry args={[width + 0.62, height + 0.62]} />
+            <meshBasicMaterial color="#f6c453" transparent opacity={0.9} />
+          </mesh>
+        ) : null}
+        <mesh position={[0, 0, 0.05]} castShadow onClick={handleClick}>
+          <boxGeometry args={[width + 0.34, height + 0.34, 0.12]} />
+          <meshStandardMaterial color="#2f2a22" roughness={0.45} />
+        </mesh>
+        <mesh position={[0, 0, 0.13]} onClick={handleClick}>
+          <planeGeometry args={[width + 0.1, height + 0.1]} />
+          <meshStandardMaterial color="#f7f1e4" roughness={0.72} />
+        </mesh>
+        <mesh position={[0, 0, 0.2]} onClick={handleClick}>
+          <planeGeometry args={[width, height]} />
+          <meshBasicMaterial map={texture} toneMapped={false} />
+        </mesh>
+        <pointLight position={[0, 1.35, 0.45]} intensity={0.55} distance={4.2} color="#fff6df" />
+      </group>
     </group>
   );
 }
 
 function EmptyFrames({ count }: { count: number }) {
+  const frames = defaultLayouts.slice(0, count);
+
   return (
     <>
-      {frameSlots.slice(0, count).map((slot, index) => (
-        <group key={index} position={slot.position} rotation={slot.rotation}>
-          <mesh position={[0, 0, 0.05]}>
-            <boxGeometry args={[2.8, 2.0, 0.12]} />
-            <meshStandardMaterial color="#4b4034" roughness={0.5} />
-          </mesh>
-          <mesh position={[0, 0, 0.14]}>
-            <planeGeometry args={[2.45, 1.65]} />
-            <meshStandardMaterial color="#d8d0c0" roughness={0.9} />
-          </mesh>
-        </group>
-      ))}
+      {frames.map((layout, index) => {
+        const mount = wallMounts[layout.wall];
+
+        return (
+          <group key={index} position={mount.position} rotation={mount.rotation}>
+            <group position={[layout.offset, layout.height, 0]}>
+              <mesh position={[0, 0, 0.05]}>
+                <boxGeometry args={[2.8, 2.0, 0.12]} />
+                <meshStandardMaterial color="#4b4034" roughness={0.5} />
+              </mesh>
+              <mesh position={[0, 0, 0.14]}>
+                <planeGeometry args={[2.45, 1.65]} />
+                <meshStandardMaterial color="#d8d0c0" roughness={0.9} />
+              </mesh>
+            </group>
+          </group>
+        );
+      })}
     </>
   );
 }
 
-export default function GalleryScene({ images }: GallerySceneProps) {
+export default function GalleryScene({
+  images,
+  layouts,
+  mode,
+  selectedImageId,
+  onSelectImage,
+}: GallerySceneProps) {
+  const isEditMode = mode === "edit";
+
   return (
     <Canvas
       shadows
-      camera={{ fov: 72, position: [0, 1.75, 7], near: 0.1, far: 80 }}
+      camera={{ fov: 72, position: [0, eyeHeight, 7], near: 0.1, far: 80 }}
       gl={{ antialias: true }}
     >
       <color attach="background" args={["#151515"]} />
@@ -208,13 +311,20 @@ export default function GalleryScene({ images }: GallerySceneProps) {
       <Room />
       {images.length > 0 ? (
         images.map((image, index) => (
-          <Artwork key={image.id} image={image} slotIndex={index} />
+          <Artwork
+            key={image.id}
+            image={image}
+            layout={layouts[image.id] ?? getDefaultLayout(image, index)}
+            isSelected={isEditMode && selectedImageId === image.id}
+            isEditable={isEditMode}
+            onSelect={() => onSelectImage(image.id)}
+          />
         ))
       ) : (
         <EmptyFrames count={6} />
       )}
-      <PlayerMovement />
-      <PointerLockControls selector=".enter-button" />
+      <PlayerMovement enabled={!isEditMode} />
+      {!isEditMode ? <PointerLockControls selector=".enter-button" /> : null}
     </Canvas>
   );
 }
