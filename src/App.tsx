@@ -6,6 +6,7 @@ import {
   Move,
   Pencil,
   RotateCcw,
+  Ruler,
   Trash2,
   UploadCloud,
 } from "lucide-react";
@@ -21,8 +22,12 @@ import {
 } from "./lib/galleryStorage";
 import {
   clearStoredLayouts,
+  clearStoredRoomConfig,
+  defaultRoomConfig,
   loadStoredLayouts,
+  loadStoredRoomConfig,
   saveStoredLayouts,
+  saveStoredRoomConfig,
 } from "./lib/layoutStorage";
 import { createSampleImages } from "./lib/sampleArt";
 import type {
@@ -30,6 +35,7 @@ import type {
   GalleryFrameLayout,
   GalleryImage,
   GalleryLayouts,
+  GalleryRoomConfig,
   GalleryWall,
 } from "./types";
 
@@ -46,13 +52,57 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-function getWallOffsetLimit(wall: GalleryWall) {
-  return wall === "north" || wall === "south" ? 7.2 : 9.2;
+function getWallLength(room: GalleryRoomConfig, wall: GalleryWall) {
+  return wall === "north" || wall === "south" ? room.width : room.depth;
+}
+
+function getWallOffsetLimit(room: GalleryRoomConfig, wall: GalleryWall) {
+  return Math.max(2.2, getWallLength(room, wall) / 2 - 1.8);
+}
+
+function getDefaultFrameWidth(image: GalleryImage) {
+  const aspect = image.width / image.height || 1.42;
+  return Math.min(3.4, Math.max(2.15, aspect * 2.15));
+}
+
+function calculateGalleryCapacity(
+  room: GalleryRoomConfig,
+  images: GalleryImage[],
+  layouts: GalleryLayouts,
+) {
+  const horizontalGap = 0.7;
+  const verticalGap = 0.55;
+  const averageWidth =
+    images.length > 0
+      ? images.reduce(
+          (sum, image) => sum + (layouts[image.id]?.width ?? getDefaultFrameWidth(image)),
+          0,
+        ) / images.length
+      : 3;
+  const averageAspect =
+    images.length > 0
+      ? images.reduce((sum, image) => sum + (image.width / image.height || 1.42), 0) /
+        images.length
+      : 1.42;
+  const averageHeight = averageWidth / averageAspect;
+  const usableHeight = Math.max(0, room.height - 1.4 - 0.85);
+  const rows = Math.max(1, Math.floor((usableHeight + verticalGap) / (averageHeight + verticalGap)));
+
+  return wallOptions.reduce((total, [wall]) => {
+    const usableLength = Math.max(0, getWallLength(room, wall) - 2.4);
+    const columns = Math.max(
+      0,
+      Math.floor((usableLength + horizontalGap) / (averageWidth + horizontalGap)),
+    );
+
+    return total + columns * rows;
+  }, 0);
 }
 
 function App() {
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [layouts, setLayouts] = useState<GalleryLayouts>(() => loadStoredLayouts());
+  const [roomConfig, setRoomConfig] = useState<GalleryRoomConfig>(() => loadStoredRoomConfig());
   const [mode, setMode] = useState<AppMode>("view");
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -66,7 +116,13 @@ function App() {
   const selectedImage = selectedIndex >= 0 ? sceneImages[selectedIndex] : sceneImages[0];
   const selectedLayout =
     selectedImage &&
-    (layouts[selectedImage.id] ?? getDefaultLayout(selectedImage, Math.max(selectedIndex, 0)));
+    (layouts[selectedImage.id] ??
+      getDefaultLayout(selectedImage, Math.max(selectedIndex, 0), roomConfig));
+  const capacity = useMemo(
+    () => calculateGalleryCapacity(roomConfig, sceneImages, layouts),
+    [layouts, roomConfig, sceneImages],
+  );
+  const remainingCapacity = Math.max(0, capacity - sceneImages.length);
   const supabaseReady = isSupabaseConfigured();
 
   useEffect(() => {
@@ -103,6 +159,10 @@ function App() {
   useEffect(() => {
     saveStoredLayouts(layouts);
   }, [layouts]);
+
+  useEffect(() => {
+    saveStoredRoomConfig(roomConfig);
+  }, [roomConfig]);
 
   useEffect(() => {
     if (mode !== "edit") {
@@ -171,9 +231,11 @@ function App() {
     const previousImages = images;
     await clearStoredImages();
     clearStoredLayouts();
+    clearStoredRoomConfig();
     previousImages.forEach(revokeImageUrl);
     setImages([]);
     setLayouts({});
+    setRoomConfig(defaultRoomConfig);
     setSelectedImageId(null);
     setMessage("已恢复示例画廊");
   }
@@ -184,7 +246,7 @@ function App() {
     }
 
     const wall = patch.wall ?? selectedLayout.wall;
-    const limit = getWallOffsetLimit(wall);
+    const limit = getWallOffsetLimit(roomConfig, wall);
 
     setLayouts((current) => ({
       ...current,
@@ -193,10 +255,39 @@ function App() {
         ...patch,
         wall,
         offset: clamp(patch.offset ?? selectedLayout.offset, -limit, limit),
-        height: clamp(patch.height ?? selectedLayout.height, 1.1, 4.2),
+        height: clamp(patch.height ?? selectedLayout.height, 1.1, roomConfig.height - 1.15),
         width: clamp(patch.width ?? selectedLayout.width, 1.2, 5),
       },
     }));
+  }
+
+  function updateRoomConfig(patch: Partial<GalleryRoomConfig>) {
+    setRoomConfig((current) => {
+      const next = {
+        width: clamp(patch.width ?? current.width, 12, 36),
+        depth: clamp(patch.depth ?? current.depth, 14, 44),
+        height: clamp(patch.height ?? current.height, 4.2, 8),
+      };
+
+      setLayouts((currentLayouts) =>
+        Object.fromEntries(
+          Object.entries(currentLayouts).map(([id, layout]) => {
+            const limit = getWallOffsetLimit(next, layout.wall);
+
+            return [
+              id,
+              {
+                ...layout,
+                offset: clamp(layout.offset, -limit, limit),
+                height: clamp(layout.height, 1.1, next.height - 1.15),
+              },
+            ];
+          }),
+        ),
+      );
+
+      return next;
+    });
   }
 
   return (
@@ -205,6 +296,7 @@ function App() {
         <GalleryScene
           images={sceneImages}
           layouts={layouts}
+          roomConfig={roomConfig}
           mode={mode}
           selectedImageId={selectedImageId}
           onSelectImage={setSelectedImageId}
@@ -315,8 +407,8 @@ function App() {
               <span>横向位置 {selectedLayout.offset.toFixed(1)}</span>
               <input
                 type="range"
-                min={-getWallOffsetLimit(selectedLayout.wall)}
-                max={getWallOffsetLimit(selectedLayout.wall)}
+                min={-getWallOffsetLimit(roomConfig, selectedLayout.wall)}
+                max={getWallOffsetLimit(roomConfig, selectedLayout.wall)}
                 step="0.1"
                 value={selectedLayout.offset}
                 onChange={(event) =>
@@ -330,7 +422,7 @@ function App() {
               <input
                 type="range"
                 min="1.1"
-                max="4.2"
+                max={Math.max(1.2, roomConfig.height - 1.15)}
                 step="0.1"
                 value={selectedLayout.height}
                 onChange={(event) =>
@@ -367,6 +459,57 @@ function App() {
               <Maximize2 size={17} />
               <span>重置画框</span>
             </button>
+          </section>
+        ) : null}
+
+        {mode === "edit" ? (
+          <section className="editor-panel space-panel" aria-label="Room editor">
+            <div className="editor-heading">
+              <Ruler size={17} />
+              <span>空间</span>
+            </div>
+
+            <div className="capacity-card">
+              <strong>{sceneImages.length} / {capacity}</strong>
+              <span>估算容量</span>
+              <small>剩余 {remainingCapacity} 张</small>
+            </div>
+
+            <label className="field">
+              <span>宽度 {roomConfig.width.toFixed(1)}</span>
+              <input
+                type="range"
+                min="12"
+                max="36"
+                step="0.5"
+                value={roomConfig.width}
+                onChange={(event) => updateRoomConfig({ width: Number(event.target.value) })}
+              />
+            </label>
+
+            <label className="field">
+              <span>深度 {roomConfig.depth.toFixed(1)}</span>
+              <input
+                type="range"
+                min="14"
+                max="44"
+                step="0.5"
+                value={roomConfig.depth}
+                onChange={(event) => updateRoomConfig({ depth: Number(event.target.value) })}
+              />
+            </label>
+
+            <label className="field">
+              <span>层高 {roomConfig.height.toFixed(1)}</span>
+              <input
+                type="range"
+                min="4.2"
+                max="8"
+                step="0.1"
+                value={roomConfig.height}
+                onChange={(event) => updateRoomConfig({ height: Number(event.target.value) })}
+              />
+            </label>
           </section>
         ) : null}
 

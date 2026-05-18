@@ -25,3 +25,9 @@ export interface GalleryFrameLayout {
 }
 
 export type GalleryLayouts = Record<string, GalleryFrameLayout>;
+
+export interface GalleryRoomConfig {
+  width: number;
+  depth: number;
+  height: number;
+}

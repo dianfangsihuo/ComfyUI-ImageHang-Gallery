@@ -6,67 +6,80 @@ import type {
   GalleryFrameLayout,
   GalleryImage,
   GalleryLayouts,
+  GalleryRoomConfig,
   GalleryWall,
 } from "../types";
 
 interface GallerySceneProps {
   images: GalleryImage[];
   layouts: GalleryLayouts;
+  roomConfig: GalleryRoomConfig;
   mode: AppMode;
   selectedImageId: string | null;
   onSelectImage: (id: string) => void;
 }
 
-const room = {
+const fallbackRoom: GalleryRoomConfig = {
   width: 18,
   depth: 22,
   height: 5.2,
 };
 
 const eyeHeight = 1.75;
-const wallInset = 0.16;
+const wallInset = 0.18;
+const wallOrder: GalleryWall[] = ["north", "west", "east", "south"];
 
-const wallMounts = {
-  north: { position: [0, 0, -room.depth / 2 + wallInset], rotation: [0, 0, 0] },
-  south: { position: [0, 0, room.depth / 2 - wallInset], rotation: [0, Math.PI, 0] },
-  west: { position: [-room.width / 2 + wallInset, 0, 0], rotation: [0, Math.PI / 2, 0] },
-  east: { position: [room.width / 2 - wallInset, 0, 0], rotation: [0, -Math.PI / 2, 0] },
-} satisfies Record<
-  GalleryWall,
-  {
-    position: [number, number, number];
-    rotation: [number, number, number];
-  }
->;
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
-const defaultLayouts = [
-  { wall: "north", offset: -5.8, height: 2.45 },
-  { wall: "north", offset: 0, height: 2.45 },
-  { wall: "north", offset: 5.8, height: 2.45 },
-  { wall: "west", offset: -5.8, height: 2.45 },
-  { wall: "west", offset: 0, height: 2.45 },
-  { wall: "west", offset: 5.8, height: 2.45 },
-  { wall: "east", offset: -5.8, height: 2.45 },
-  { wall: "east", offset: 0, height: 2.45 },
-  { wall: "east", offset: 5.8, height: 2.45 },
-  { wall: "south", offset: -5.8, height: 2.45 },
-  { wall: "south", offset: 0, height: 2.45 },
-  { wall: "south", offset: 5.8, height: 2.45 },
-] satisfies Array<Omit<GalleryFrameLayout, "width">>;
+function getWallLength(room: GalleryRoomConfig, wall: GalleryWall) {
+  return wall === "north" || wall === "south" ? room.width : room.depth;
+}
+
+function getWallMount(room: GalleryRoomConfig, wall: GalleryWall) {
+  const mounts = {
+    north: { position: [0, 0, -room.depth / 2 + wallInset], rotation: [0, 0, 0] },
+    south: { position: [0, 0, room.depth / 2 - wallInset], rotation: [0, Math.PI, 0] },
+    west: { position: [-room.width / 2 + wallInset, 0, 0], rotation: [0, Math.PI / 2, 0] },
+    east: { position: [room.width / 2 - wallInset, 0, 0], rotation: [0, -Math.PI / 2, 0] },
+  } satisfies Record<
+    GalleryWall,
+    {
+      position: [number, number, number];
+      rotation: [number, number, number];
+    }
+  >;
+
+  return mounts[wall];
+}
 
 function defaultWidthFor(image: GalleryImage) {
   const aspect = image.width / image.height || 1.42;
   return Math.min(3.4, Math.max(2.15, aspect * 2.15));
 }
 
-export function getDefaultLayout(image: GalleryImage, index: number): GalleryFrameLayout {
+export function getDefaultLayout(
+  image: GalleryImage,
+  index: number,
+  room: GalleryRoomConfig = fallbackRoom,
+): GalleryFrameLayout {
+  const wall = wallOrder[Math.floor(index / 3) % wallOrder.length];
+  const slot = index % 3;
+  const wallLength = getWallLength(room, wall);
+  const usableLength = Math.max(5, wallLength - 3.6);
+  const spacing = Math.max(2.8, usableLength / 3);
+  const limit = usableLength / 2;
+
   return {
-    ...defaultLayouts[index % defaultLayouts.length],
+    wall,
+    offset: clamp((slot - 1) * spacing, -limit, limit),
+    height: clamp(room.height * 0.48, 2.2, room.height - 1.15),
     width: defaultWidthFor(image),
   };
 }
 
-function PlayerMovement() {
+function PlayerMovement({ room }: { room: GalleryRoomConfig }) {
   const { camera, gl } = useThree();
   const keys = useRef(new Set<string>());
   const verticalVelocity = useRef(0);
@@ -162,8 +175,16 @@ function PlayerMovement() {
       isGrounded.current = true;
     }
 
-    camera.position.x = THREE.MathUtils.clamp(camera.position.x, -7.5, 7.5);
-    camera.position.z = THREE.MathUtils.clamp(camera.position.z, -9.5, 9.5);
+    camera.position.x = THREE.MathUtils.clamp(
+      camera.position.x,
+      -room.width / 2 + 1.25,
+      room.width / 2 - 1.25,
+    );
+    camera.position.z = THREE.MathUtils.clamp(
+      camera.position.z,
+      -room.depth / 2 + 1.25,
+      room.depth / 2 - 1.25,
+    );
   });
 
   return null;
@@ -261,21 +282,106 @@ function FirstPersonLookControls({ mode }: { mode: AppMode }) {
   return null;
 }
 
-function Room() {
+function FloorLines({ room }: { room: GalleryRoomConfig }) {
+  const lines = useMemo(() => {
+    const pieces: Array<{
+      key: string;
+      position: [number, number, number];
+      scale: [number, number, number];
+    }> = [];
+    const spacing = 3;
+
+    for (let x = -room.width / 2 + spacing; x < room.width / 2; x += spacing) {
+      pieces.push({
+        key: `x-${x.toFixed(1)}`,
+        position: [x, 0.025, 0],
+        scale: [0.018, 0.018, room.depth],
+      });
+    }
+
+    for (let z = -room.depth / 2 + spacing; z < room.depth / 2; z += spacing) {
+      pieces.push({
+        key: `z-${z.toFixed(1)}`,
+        position: [0, 0.028, z],
+        scale: [room.width, 0.018, 0.018],
+      });
+    }
+
+    return pieces;
+  }, [room]);
+
+  return (
+    <>
+      {lines.map((line) => (
+        <mesh key={line.key} position={line.position}>
+          <boxGeometry args={line.scale} />
+          <meshStandardMaterial color="#c6aa6c" roughness={0.48} metalness={0.18} />
+        </mesh>
+      ))}
+    </>
+  );
+}
+
+function CeilingLights({ room }: { room: GalleryRoomConfig }) {
+  const lightRows = Math.max(1, Math.round(room.depth / 12));
+
+  return (
+    <>
+      {Array.from({ length: lightRows }, (_, index) => {
+        const z = ((index + 1) / (lightRows + 1) - 0.5) * room.depth;
+
+        return (
+          <group key={z} position={[0, room.height - 0.05, z]}>
+            <mesh rotation={[Math.PI / 2, 0, 0]}>
+              <planeGeometry args={[Math.min(8, room.width * 0.46), 0.46]} />
+              <meshBasicMaterial color="#fff2cf" />
+            </mesh>
+            <pointLight position={[0, -0.2, 0]} intensity={1.1} distance={room.height + 7} color="#fff0d0" />
+          </group>
+        );
+      })}
+    </>
+  );
+}
+
+function Baseboards({ room }: { room: GalleryRoomConfig }) {
+  return (
+    <group>
+      <mesh position={[0, 0.18, -room.depth / 2 + 0.06]}>
+        <boxGeometry args={[room.width, 0.24, 0.12]} />
+        <meshStandardMaterial color="#554435" roughness={0.55} />
+      </mesh>
+      <mesh position={[0, 0.18, room.depth / 2 - 0.06]}>
+        <boxGeometry args={[room.width, 0.24, 0.12]} />
+        <meshStandardMaterial color="#554435" roughness={0.55} />
+      </mesh>
+      <mesh position={[-room.width / 2 + 0.06, 0.18, 0]}>
+        <boxGeometry args={[0.12, 0.24, room.depth]} />
+        <meshStandardMaterial color="#554435" roughness={0.55} />
+      </mesh>
+      <mesh position={[room.width / 2 - 0.06, 0.18, 0]}>
+        <boxGeometry args={[0.12, 0.24, room.depth]} />
+        <meshStandardMaterial color="#554435" roughness={0.55} />
+      </mesh>
+    </group>
+  );
+}
+
+function Room({ room }: { room: GalleryRoomConfig }) {
   return (
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
         <planeGeometry args={[room.width, room.depth]} />
-        <meshStandardMaterial color="#d8d2c4" roughness={0.78} />
+        <meshStandardMaterial color="#b9b6aa" roughness={0.58} metalness={0.04} />
       </mesh>
       <mesh position={[0, room.height, 0]} rotation={[Math.PI / 2, 0, 0]}>
         <planeGeometry args={[room.width, room.depth]} />
-        <meshStandardMaterial color="#f4f0e6" roughness={0.9} />
+        <meshStandardMaterial color="#efe9dc" roughness={0.82} />
       </mesh>
-      <Wall position={[0, room.height / 2, -room.depth / 2]} />
-      <Wall position={[0, room.height / 2, room.depth / 2]} rotation={[0, Math.PI, 0]} />
-      <Wall position={[-room.width / 2, room.height / 2, 0]} rotation={[0, Math.PI / 2, 0]} />
-      <Wall position={[room.width / 2, room.height / 2, 0]} rotation={[0, -Math.PI / 2, 0]} />
+      <Wall length={room.width} height={room.height} position={[0, room.height / 2, -room.depth / 2]} />
+      <Wall length={room.width} height={room.height} position={[0, room.height / 2, room.depth / 2]} rotation={[0, Math.PI, 0]} />
+      <Wall length={room.depth} height={room.height} position={[-room.width / 2, room.height / 2, 0]} rotation={[0, Math.PI / 2, 0]} />
+      <Wall length={room.depth} height={room.height} position={[room.width / 2, room.height / 2, 0]} rotation={[0, -Math.PI / 2, 0]} />
       <mesh position={[0, 0.02, 0]}>
         <boxGeometry args={[0.05, 0.04, room.depth]} />
         <meshStandardMaterial color="#b59f77" />
@@ -284,21 +390,28 @@ function Room() {
         <boxGeometry args={[0.05, 0.04, room.width]} />
         <meshStandardMaterial color="#b59f77" />
       </mesh>
+      <FloorLines room={room} />
+      <Baseboards room={room} />
+      <CeilingLights room={room} />
     </group>
   );
 }
 
 function Wall({
+  length,
+  height,
   position,
   rotation = [0, 0, 0],
 }: {
+  length: number;
+  height: number;
   position: [number, number, number];
   rotation?: [number, number, number];
 }) {
   return (
     <mesh position={position} rotation={rotation} receiveShadow>
-      <planeGeometry args={[room.width, room.height]} />
-      <meshStandardMaterial color="#eee9df" roughness={0.86} />
+      <planeGeometry args={[length, height]} />
+      <meshStandardMaterial color="#e7e1d3" roughness={0.88} />
     </mesh>
   );
 }
@@ -306,17 +419,19 @@ function Wall({
 function Artwork({
   image,
   layout,
+  room,
   isSelected,
   isEditable,
   onSelect,
 }: {
   image: GalleryImage;
   layout: GalleryFrameLayout;
+  room: GalleryRoomConfig;
   isSelected: boolean;
   isEditable: boolean;
   onSelect: () => void;
 }) {
-  const mount = wallMounts[layout.wall];
+  const mount = getWallMount(room, layout.wall);
   const texture = useLoader(THREE.TextureLoader, image.url);
   const aspect = image.width / image.height || 1.42;
   const width = layout.width;
@@ -363,13 +478,23 @@ function Artwork({
   );
 }
 
-function EmptyFrames({ count }: { count: number }) {
-  const frames = defaultLayouts.slice(0, count);
+function EmptyFrames({ count, room }: { count: number; room: GalleryRoomConfig }) {
+  const frames = Array.from({ length: count }, (_, index) => {
+    const wall = wallOrder[Math.floor(index / 3) % wallOrder.length];
+    const slot = index % 3;
+    const usableLength = Math.max(5, getWallLength(room, wall) - 3.6);
+
+    return {
+      wall,
+      offset: clamp((slot - 1) * Math.max(2.8, usableLength / 3), -usableLength / 2, usableLength / 2),
+      height: clamp(room.height * 0.48, 2.2, room.height - 1.15),
+    };
+  });
 
   return (
     <>
       {frames.map((layout, index) => {
-        const mount = wallMounts[layout.wall];
+        const mount = getWallMount(room, layout.wall);
 
         return (
           <group key={index} position={mount.position} rotation={mount.rotation}>
@@ -393,6 +518,7 @@ function EmptyFrames({ count }: { count: number }) {
 export default function GalleryScene({
   images,
   layouts,
+  roomConfig,
   mode,
   selectedImageId,
   onSelectImage,
@@ -407,26 +533,32 @@ export default function GalleryScene({
     >
       <color attach="background" args={["#151515"]} />
       <fog attach="fog" args={["#151515", 20, 42]} />
-      <ambientLight intensity={0.42} />
-      <directionalLight position={[3, 8, 5]} intensity={1.2} castShadow />
-      <spotLight position={[0, 4.85, 0]} angle={0.9} penumbra={0.5} intensity={1.5} />
-      <Room />
+      <ambientLight intensity={0.38} />
+      <directionalLight position={[3, roomConfig.height + 3, 5]} intensity={0.8} castShadow />
+      <spotLight
+        position={[0, roomConfig.height - 0.35, 0]}
+        angle={0.95}
+        penumbra={0.6}
+        intensity={1.2}
+      />
+      <Room room={roomConfig} />
       {images.length > 0 ? (
         images.map((image, index) => (
           <Artwork
             key={image.id}
             image={image}
-            layout={layouts[image.id] ?? getDefaultLayout(image, index)}
+            layout={layouts[image.id] ?? getDefaultLayout(image, index, roomConfig)}
+            room={roomConfig}
             isSelected={isEditMode && selectedImageId === image.id}
             isEditable={isEditMode}
             onSelect={() => onSelectImage(image.id)}
           />
         ))
       ) : (
-        <EmptyFrames count={6} />
+        <EmptyFrames count={6} room={roomConfig} />
       )}
       <FirstPersonLookControls mode={mode} />
-      <PlayerMovement />
+      <PlayerMovement room={roomConfig} />
     </Canvas>
   );
 }
