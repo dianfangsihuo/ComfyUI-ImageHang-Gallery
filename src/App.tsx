@@ -1,5 +1,6 @@
 import {
   Eye,
+  DoorOpen,
   ImagePlus,
   Loader2,
   Maximize2,
@@ -187,6 +188,15 @@ function App() {
   );
   const remainingCapacity = Math.max(0, capacity - sceneImages.length);
   const supabaseReady = isSupabaseConfigured();
+
+  function switchMode(nextMode: AppMode) {
+    setMode(nextMode);
+
+    if (nextMode === "view") {
+      setSelectedImageId(null);
+      setSelectedWallId(null);
+    }
+  }
 
   useEffect(() => {
     let isMounted = true;
@@ -455,7 +465,7 @@ function App() {
   const selectedWall = customWalls.find((wall) => wall.id === selectedWallId) ?? customWalls[0];
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell ${mode}-shell`}>
       <section className="gallery-stage" aria-label="3D gallery viewport">
         <GalleryScene
           images={placedSceneImages}
@@ -468,16 +478,32 @@ function App() {
           onSelectImage={setSelectedImageId}
           onPlaceImageOnWall={placePendingImage}
         />
-        {mode === "view" ? (
-          <button className="enter-button" type="button">
-            进入画廊
+        <div className="floating-mode-switch" aria-label="Mode switch">
+          <button
+            type="button"
+            className={`view-mode-button ${mode === "view" ? "active" : ""}`}
+            onClick={() => switchMode("view")}
+            title="观赏模式"
+          >
+            <Eye size={17} />
+            <span>观赏</span>
           </button>
-        ) : (
+          <button
+            type="button"
+            className={mode === "edit" ? "active" : ""}
+            onClick={() => switchMode("edit")}
+            title="编辑模式"
+          >
+            <Pencil size={17} />
+            <span>编辑</span>
+          </button>
+        </div>
+        {mode === "edit" ? (
           <div className="edit-badge">
             <Move size={16} />
-            <span>编辑模式</span>
+            <span>俯视编辑</span>
           </div>
-        )}
+        ) : null}
       </section>
 
       <aside className={`control-panel ${mode}-panel`} aria-label="Gallery controls">
@@ -510,7 +536,7 @@ function App() {
           <button
             type="button"
             className={`view-mode-button ${mode === "view" ? "active" : ""}`}
-            onClick={() => setMode("view")}
+            onClick={() => switchMode("view")}
             title="进入画廊"
           >
             <Eye size={17} />
@@ -519,7 +545,7 @@ function App() {
           <button
             type="button"
             className={mode === "edit" ? "active" : ""}
-            onClick={() => setMode("edit")}
+            onClick={() => switchMode("edit")}
           >
             <Pencil size={17} />
             <span>编辑</span>
@@ -562,6 +588,27 @@ function App() {
 
         {message ? <p className="message">{message}</p> : null}
 
+        {mode === "edit" ? (
+          <section className="editor-panel editor-hints" aria-label="Editor hints">
+            <div className="editor-heading">
+              <Pencil size={17} />
+              <span>编辑工作台</span>
+            </div>
+            <div className="hint-grid">
+              <span>视角</span>
+              <strong>拖动画布平移，滚轮缩放俯视图</strong>
+              <span>挂画</span>
+              <strong>
+                {pendingPlacementIds.length > 0
+                  ? "点击墙面上的目标位置放置待挂图片"
+                  : "先上传图片，再点击墙面定位"}
+              </strong>
+              <span>对象</span>
+              <strong>房间、墙壁和画框已独立编辑</strong>
+            </div>
+          </section>
+        ) : null}
+
         {mode === "edit" && selectedImage && selectedLayout ? (
           <section className="editor-panel" aria-label="Frame editor">
             <div className="editor-heading">
@@ -574,7 +621,7 @@ function App() {
               <select
                 value={selectedLayout.wall}
                 onChange={(event) =>
-                  updateSelectedLayout({ wall: event.target.value as GalleryWall })
+                  updateSelectedLayout({ wall: event.target.value as GalleryWallTarget })
                 }
               >
                 {wallOptions.map(([wall, label]) => (
@@ -668,6 +715,21 @@ function App() {
               <button type="button" className="tool-button secondary" onClick={addCustomWall}>
                 <Plus size={17} />
                 <span>新增墙壁</span>
+              </button>
+            </div>
+
+            <div className="object-library" aria-label="Object library">
+              <button type="button" className="object-chip active" onClick={addCustomWall}>
+                <Ruler size={15} />
+                <span>墙壁</span>
+              </button>
+              <button type="button" className="object-chip" disabled title="后续可扩展门洞对象">
+                <DoorOpen size={15} />
+                <span>门</span>
+              </button>
+              <button type="button" className="object-chip" disabled title="后续可扩展展台对象">
+                <Maximize2 size={15} />
+                <span>展台</span>
               </button>
             </div>
 

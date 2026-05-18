@@ -327,6 +327,118 @@ function FirstPersonLookControls({ mode }: { mode: AppMode }) {
   return null;
 }
 
+function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
+  const { camera, gl } = useThree();
+  const target = useRef(new THREE.Vector3());
+  const zoomHeight = useRef(26);
+  const isPanning = useRef(false);
+  const pointerId = useRef<number | null>(null);
+
+  const applyCamera = () => {
+    const center = target.current;
+    camera.position.set(center.x, zoomHeight.current, center.z + zoomHeight.current * 0.38);
+    camera.lookAt(center.x, 0, center.z);
+    camera.updateProjectionMatrix();
+  };
+
+  const clampTarget = () => {
+    const totalMinX = -room.width / 2 - 2;
+    const totalMaxX = roomOffset(room, room.roomCount - 1) + room.width / 2 + 2;
+
+    target.current.x = THREE.MathUtils.clamp(target.current.x, totalMinX, totalMaxX);
+    target.current.z = THREE.MathUtils.clamp(
+      target.current.z,
+      -room.depth / 2 - 2,
+      room.depth / 2 + 2,
+    );
+  };
+
+  useEffect(() => {
+    if (document.pointerLockElement === gl.domElement) {
+      document.exitPointerLock();
+    }
+
+    const centerX = roomOffset(room, room.roomCount - 1) / 2;
+    target.current.set(centerX, 0, 0);
+    zoomHeight.current = THREE.MathUtils.clamp(
+      Math.max(room.width, room.depth, room.roomCount * 8) * 1.25,
+      18,
+      52,
+    );
+    camera.rotation.order = "YXZ";
+    applyCamera();
+  }, [camera, gl, room.depth, room.height, room.roomCount, room.width]);
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target !== canvas || event.button !== 0) {
+        return;
+      }
+
+      isPanning.current = true;
+      pointerId.current = event.pointerId;
+      canvas.setPointerCapture(event.pointerId);
+    };
+
+    const onPointerMove = (event: PointerEvent) => {
+      if (!isPanning.current || pointerId.current !== event.pointerId) {
+        return;
+      }
+
+      const panScale = zoomHeight.current * 0.0018;
+      target.current.x -= event.movementX * panScale;
+      target.current.z -= event.movementY * panScale;
+      clampTarget();
+      applyCamera();
+    };
+
+    const stopPanning = (event: PointerEvent) => {
+      if (pointerId.current === event.pointerId && canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+
+      isPanning.current = false;
+      pointerId.current = null;
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (event.target !== canvas) {
+        return;
+      }
+
+      event.preventDefault();
+      zoomHeight.current = THREE.MathUtils.clamp(
+        zoomHeight.current + event.deltaY * 0.026,
+        10,
+        58,
+      );
+      applyCamera();
+    };
+
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointermove", onPointerMove);
+    canvas.addEventListener("pointerup", stopPanning);
+    canvas.addEventListener("pointercancel", stopPanning);
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", stopPanning);
+      canvas.removeEventListener("pointercancel", stopPanning);
+      canvas.removeEventListener("wheel", onWheel);
+    };
+  }, [camera, gl, room]);
+
+  useFrame(() => {
+    applyCamera();
+  });
+
+  return null;
+}
+
 function FloorLines({ room }: { room: GalleryRoomConfig }) {
   const lines = useMemo(() => {
     const pieces: Array<{
@@ -707,8 +819,14 @@ export default function GalleryScene({
       ) : (
         <EmptyFrames count={6} room={roomConfig} />
       )}
-      <FirstPersonLookControls mode={mode} />
-      <PlayerMovement room={roomConfig} />
+      {isEditMode ? (
+        <EditorCameraControls room={roomConfig} />
+      ) : (
+        <>
+          <FirstPersonLookControls mode={mode} />
+          <PlayerMovement room={roomConfig} />
+        </>
+      )}
     </Canvas>
   );
 }

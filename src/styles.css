@@ -39,6 +39,14 @@ button {
   background: #111111;
 }
 
+.view-shell {
+  grid-template-columns: 1fr;
+}
+
+.view-shell .control-panel {
+  display: none;
+}
+
 .gallery-stage {
   position: relative;
   min-width: 0;
@@ -65,6 +73,41 @@ button {
   background: rgba(22, 18, 14, 0.72);
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
   backdrop-filter: blur(12px);
+}
+
+.floating-mode-switch {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 3;
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(22, 18, 14, 0.72);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  backdrop-filter: blur(12px);
+}
+
+.floating-mode-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 76px;
+  height: 36px;
+  border-radius: 6px;
+  color: #efe6d7;
+  background: transparent;
+  font-size: 0.84rem;
+  font-weight: 900;
+}
+
+.floating-mode-switch button.active {
+  color: #201912;
+  background: #f2e8d7;
 }
 
 .edit-badge {
@@ -414,6 +457,64 @@ h1 {
   font-weight: 800;
 }
 
+.editor-hints {
+  border-color: rgba(68, 92, 78, 0.24);
+  background:
+    linear-gradient(135deg, rgba(226, 237, 229, 0.8), rgba(255, 255, 255, 0.46)),
+    rgba(255, 255, 255, 0.42);
+}
+
+.hint-grid {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px 10px;
+  align-items: start;
+}
+
+.hint-grid span {
+  color: #6a5c4c;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.hint-grid strong {
+  color: #211b15;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.object-library {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.object-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 38px;
+  border: 1px solid rgba(75, 62, 48, 0.16);
+  border-radius: 6px;
+  color: #332b24;
+  background: #fbf7ef;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.object-chip.active {
+  border-color: rgba(68, 92, 78, 0.3);
+  color: #234537;
+  background: #e3efe5;
+}
+
+.object-chip:disabled {
+  cursor: not-allowed;
+  opacity: 0.54;
+}
+
 .collection-header {
   display: flex;
   align-items: center;
@@ -502,6 +603,16 @@ h1 {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(430px, 64vh) auto;
     height: auto;
+    min-height: 100vh;
+  }
+
+  .view-shell {
+    grid-template-rows: 100vh;
+    height: 100vh;
+    min-height: 100vh;
+  }
+
+  .view-shell .gallery-stage {
     min-height: 100vh;
   }
 
