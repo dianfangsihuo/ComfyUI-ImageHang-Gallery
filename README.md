@@ -10,6 +10,8 @@ A browser-based 3D gallery for walking through user-uploaded photos.
 
 ## Development
 
+Double-click `start.bat`, or run:
+
 ```powershell
 npm install
 npm run dev
