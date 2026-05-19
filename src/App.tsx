@@ -94,6 +94,7 @@ const wallLabels: Record<GalleryWall, string> = {
 };
 
 const builtWallOptions = Object.entries(wallLabels) as Array<[GalleryWall, string]>;
+const roomGap = 0.18;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -130,7 +131,7 @@ function getLinearRoomOffset(room: GalleryRoomConfig, roomIndex: number) {
   for (let index = 0; index < roomIndex; index += 1) {
     const current = getRoomDimensions(room, index);
     const next = getRoomDimensions(room, index + 1);
-    offset += current.width / 2 + next.width / 2 + 2.2;
+    offset += current.width / 2 + next.width / 2 + roomGap;
   }
 
   return offset;
@@ -751,7 +752,7 @@ function App() {
             width: template.width,
             depth: template.depth,
             height: template.height,
-            x: lastCenter.x + lastRoom.width / 2 + template.width / 2 + 2.2,
+            x: lastCenter.x + lastRoom.width / 2 + template.width / 2 + roomGap,
             z: template.z ?? 0,
           },
         ],

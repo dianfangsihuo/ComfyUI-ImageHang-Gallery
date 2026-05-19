@@ -12,6 +12,7 @@ const ROOM_STORAGE_KEY = "image-hang.room-config";
 const WALL_STORAGE_KEY = "image-hang.custom-walls";
 const DOOR_STORAGE_KEY = "image-hang.doors";
 const SETTINGS_STORAGE_KEY = "image-hang.editor-settings";
+const DEFAULT_ROOM_GAP = 0.18;
 
 export const defaultRoomConfig: GalleryRoomConfig = {
   width: 18,
@@ -92,7 +93,7 @@ export function loadStoredRoomConfig(): GalleryRoomConfig {
         width: clampNumber(room?.width, width, 4, 40),
         depth: clampNumber(room?.depth, depth, 6, 48),
         height: clampNumber(room?.height, height, 3.2, 9),
-        x: clampNumber(room?.x, index === 0 ? 0 : index * (width + 2.2), -80, 80),
+        x: clampNumber(room?.x, index === 0 ? 0 : index * (width + DEFAULT_ROOM_GAP), -80, 80),
         z: clampNumber(room?.z, 0, -80, 80),
       };
     });

@@ -75,6 +75,7 @@ const fallbackRoom: GalleryRoomConfig = {
   rooms: [{ width: 18, depth: 22, height: 5.2 }],
 };
 
+const roomGap = 0.18;
 const eyeHeight = 1.75;
 const wallInset = 0.18;
 const wallOrder: GalleryWall[] = ["north", "west", "east", "south"];
@@ -93,7 +94,7 @@ function linearRoomOffset(room: GalleryRoomConfig, roomIndex: number) {
   for (let index = 0; index < roomIndex; index += 1) {
     const current = getRoomDimensions(room, index);
     const next = getRoomDimensions(room, index + 1);
-    offset += current.width / 2 + next.width / 2 + 2.2;
+    offset += current.width / 2 + next.width / 2 + roomGap;
   }
 
   return offset;
@@ -399,6 +400,28 @@ function getConnectedRoomWallTarget(
       width: door.width,
       height: door.height,
     } satisfies WallOpening,
+  };
+}
+
+function getConnectedDoorPortal(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  door: GalleryDoor,
+) {
+  const target = getConnectedRoomWallTarget(room, customWalls, door);
+
+  if (!target) {
+    return null;
+  }
+
+  const built = parseBuiltWallTarget(target.wall);
+  if (!built) {
+    return null;
+  }
+
+  return {
+    ...target,
+    built,
   };
 }
 
@@ -2376,6 +2399,101 @@ function Door({
   );
 }
 
+function ConnectedDoorPortal({
+  door,
+  room,
+  customWalls,
+  isEditMode,
+  isSelected,
+  editorViewMode,
+  onSelectDoor,
+  onToggleDoor,
+}: {
+  door: GalleryDoor;
+  room: GalleryRoomConfig;
+  customWalls: GalleryCustomWall[];
+  isEditMode: boolean;
+  isSelected: boolean;
+  editorViewMode: EditorViewMode;
+  onSelectDoor: (id: string) => void;
+  onToggleDoor: (id: string) => void;
+}) {
+  const portal = getConnectedDoorPortal(room, customWalls, door);
+
+  if (!portal) {
+    return null;
+  }
+
+  const mount = getWallMount(room, portal.built.wall, portal.built.roomIndex, 0);
+  const editableTarget: EditableHitTarget = {
+    kind: "door",
+    id: door.id,
+    label: `${door.name} 对侧`,
+  };
+  const frameThickness = 0.16;
+  const frameDepth = 0.24;
+
+  function handleClick(event: ThreeEvent<MouseEvent>) {
+    event.stopPropagation();
+
+    if (!isEditMode) {
+      onToggleDoor(door.id);
+      return;
+    }
+
+    if (editorViewMode === "firstPerson") {
+      return;
+    }
+
+    onSelectDoor(door.id);
+  }
+
+  return (
+    <group position={mount.position} rotation={mount.rotation}>
+      <group position={[portal.opening.offset, door.height / 2, 0]}>
+        {isSelected && isEditMode ? (
+          <group>
+            <mesh position={[-door.width / 2 - 0.12, 0, 0.02]}>
+              <boxGeometry args={[0.08, door.height + 0.32, 0.3]} />
+              <meshBasicMaterial color="#f6c453" transparent opacity={0.48} />
+            </mesh>
+            <mesh position={[door.width / 2 + 0.12, 0, 0.02]}>
+              <boxGeometry args={[0.08, door.height + 0.32, 0.3]} />
+              <meshBasicMaterial color="#f6c453" transparent opacity={0.48} />
+            </mesh>
+            <mesh position={[0, door.height / 2 + 0.15, 0.02]}>
+              <boxGeometry args={[door.width + 0.4, 0.08, 0.3]} />
+              <meshBasicMaterial color="#f6c453" transparent opacity={0.48} />
+            </mesh>
+          </group>
+        ) : null}
+        <mesh position={[-door.width / 2 - frameThickness / 2, 0, 0]} onClick={handleClick} userData={{ editableTarget }}>
+          <boxGeometry args={[frameThickness, door.height + frameThickness, frameDepth]} />
+          <meshStandardMaterial color="#6d5946" roughness={0.68} />
+        </mesh>
+        <mesh position={[door.width / 2 + frameThickness / 2, 0, 0]} onClick={handleClick} userData={{ editableTarget }}>
+          <boxGeometry args={[frameThickness, door.height + frameThickness, frameDepth]} />
+          <meshStandardMaterial color="#6d5946" roughness={0.68} />
+        </mesh>
+        <mesh position={[0, door.height / 2 + frameThickness / 2, 0]} onClick={handleClick} userData={{ editableTarget }}>
+          <boxGeometry args={[door.width + frameThickness * 2, frameThickness, frameDepth]} />
+          <meshStandardMaterial color="#78634f" roughness={0.66} />
+        </mesh>
+        <mesh position={[0, -door.height / 2 + 0.04, 0.01]} onClick={handleClick} userData={{ editableTarget }}>
+          <boxGeometry args={[door.width + frameThickness * 1.6, 0.08, frameDepth]} />
+          <meshStandardMaterial color="#8b765f" roughness={0.72} />
+        </mesh>
+        {!door.isOpen ? (
+          <mesh position={[0, -0.01, 0.08]} castShadow onClick={handleClick} userData={{ editableTarget }}>
+            <boxGeometry args={[Math.max(0.3, door.width - 0.1), Math.max(0.8, door.height - 0.1), 0.1]} />
+            <meshStandardMaterial color="#4d3b2f" roughness={0.62} metalness={0.04} />
+          </mesh>
+        ) : null}
+      </group>
+    </group>
+  );
+}
+
 function DoorConnections({
   room,
   customWalls,
@@ -2706,6 +2824,19 @@ export default function GalleryScene({
           onSelectDoor={onSelectDoor}
           onToggleDoor={onToggleDoor}
           onUpdateDoor={onUpdateDoor}
+        />
+      ))}
+      {doors.map((door) => (
+        <ConnectedDoorPortal
+          key={`${door.id}:portal`}
+          door={door}
+          room={sceneRoomConfig}
+          customWalls={customWalls}
+          isEditMode={isEditMode}
+          isSelected={isEditMode && selectedDoorId === door.id}
+          editorViewMode={editorViewMode}
+          onSelectDoor={onSelectDoor}
+          onToggleDoor={onToggleDoor}
         />
       ))}
       {images.length > 0 ? (
