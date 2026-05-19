@@ -40,7 +40,20 @@ interface GallerySceneProps {
   onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
   onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
+  onAimTargetChange: (label: string | null) => void;
 }
+
+type EditableHitTarget =
+  | { kind: "artwork"; id: string; label: string }
+  | { kind: "customWall"; id: string; label: string }
+  | { kind: "door"; id: string; label: string }
+  | { kind: "builtWall"; wall: GalleryWallTarget; roomIndex: number; label: string };
+
+type EditableHit = {
+  target: EditableHitTarget;
+  object: THREE.Object3D;
+  point: THREE.Vector3;
+};
 
 const fallbackRoom: GalleryRoomConfig = {
   width: 18,
@@ -341,6 +354,17 @@ function FirstPersonLookControls({
       applyRotation();
     };
 
+    if (Math.abs(camera.rotation.x) > Math.PI / 3) {
+      yaw.current = 0;
+      pitch.current = 0;
+      applyRotation();
+    } else {
+      camera.rotation.order = "YXZ";
+      yaw.current = camera.rotation.y;
+      pitch.current = camera.rotation.x;
+      camera.rotation.z = 0;
+    }
+
     const requestPointerLock = () => {
       if (document.pointerLockElement !== canvas) {
         void canvas.requestPointerLock();
@@ -597,7 +621,7 @@ function Room({
 }) {
   const xOffset = roomOffset(room, roomIndex);
   const placeOnWall = (wall: GalleryWall, event: ThreeEvent<MouseEvent>) => {
-    if (!isEditMode || !pendingPlacementImageId) {
+    if (!isEditMode || !pendingPlacementImageId || editorViewMode !== "topdown") {
       return;
     }
 
@@ -634,10 +658,57 @@ function Room({
         <planeGeometry args={[room.width, room.depth]} />
         <meshStandardMaterial color="#efe9dc" roughness={0.82} />
       </mesh>
-      <Wall length={room.width} height={room.height} position={[0, room.height / 2, -room.depth / 2]} onClick={(event) => placeOnWall("north", event)} />
-      <Wall length={room.width} height={room.height} position={[0, room.height / 2, room.depth / 2]} rotation={[0, Math.PI, 0]} onClick={(event) => placeOnWall("south", event)} />
-      <Wall length={room.depth} height={room.height} position={[-room.width / 2, room.height / 2, 0]} rotation={[0, Math.PI / 2, 0]} onClick={(event) => placeOnWall("west", event)} />
-      <Wall length={room.depth} height={room.height} position={[room.width / 2, room.height / 2, 0]} rotation={[0, -Math.PI / 2, 0]} onClick={(event) => placeOnWall("east", event)} />
+      <Wall
+        length={room.width}
+        height={room.height}
+        position={[0, room.height / 2, -room.depth / 2]}
+        onClick={(event) => placeOnWall("north", event)}
+        editableTarget={{
+          kind: "builtWall",
+          wall: builtWallTarget(roomIndex, "north"),
+          roomIndex,
+          label: `房间 ${roomIndex + 1} 北墙`,
+        }}
+      />
+      <Wall
+        length={room.width}
+        height={room.height}
+        position={[0, room.height / 2, room.depth / 2]}
+        rotation={[0, Math.PI, 0]}
+        onClick={(event) => placeOnWall("south", event)}
+        editableTarget={{
+          kind: "builtWall",
+          wall: builtWallTarget(roomIndex, "south"),
+          roomIndex,
+          label: `房间 ${roomIndex + 1} 南墙`,
+        }}
+      />
+      <Wall
+        length={room.depth}
+        height={room.height}
+        position={[-room.width / 2, room.height / 2, 0]}
+        rotation={[0, Math.PI / 2, 0]}
+        onClick={(event) => placeOnWall("west", event)}
+        editableTarget={{
+          kind: "builtWall",
+          wall: builtWallTarget(roomIndex, "west"),
+          roomIndex,
+          label: `房间 ${roomIndex + 1} 西墙`,
+        }}
+      />
+      <Wall
+        length={room.depth}
+        height={room.height}
+        position={[room.width / 2, room.height / 2, 0]}
+        rotation={[0, -Math.PI / 2, 0]}
+        onClick={(event) => placeOnWall("east", event)}
+        editableTarget={{
+          kind: "builtWall",
+          wall: builtWallTarget(roomIndex, "east"),
+          roomIndex,
+          label: `房间 ${roomIndex + 1} 东墙`,
+        }}
+      />
       <mesh position={[0, 0.02, 0]}>
         <boxGeometry args={[0.05, 0.04, room.depth]} />
         <meshStandardMaterial color="#b59f77" />
@@ -973,21 +1044,231 @@ function FirstPersonAimFollower({
   return null;
 }
 
+function findEditableHit(
+  intersections: THREE.Intersection[],
+  options: { wallOnly?: boolean } = {},
+): EditableHit | null {
+  for (const hit of intersections) {
+    let current: THREE.Object3D | null = hit.object;
+
+    while (current) {
+      const target = current.userData.editableTarget as EditableHitTarget | undefined;
+
+      if (target) {
+        const isWallTarget = target.kind === "builtWall" || target.kind === "customWall";
+
+        if (options.wallOnly && !isWallTarget) {
+          break;
+        }
+
+        return {
+          target,
+          object: hit.object,
+          point: hit.point,
+        };
+      }
+
+      current = current.parent;
+    }
+  }
+
+  return null;
+}
+
+function FirstPersonEditorPicker({
+  isEditMode,
+  editorViewMode,
+  pendingPlacementImageId,
+  room,
+  customWalls,
+  onSelectImage,
+  onSelectWall,
+  onSelectDoor,
+  onSelectRoom,
+  onPlaceImageOnWall,
+  onAimTargetChange,
+}: {
+  isEditMode: boolean;
+  editorViewMode: EditorViewMode;
+  pendingPlacementImageId: string | null;
+  room: GalleryRoomConfig;
+  customWalls: GalleryCustomWall[];
+  onSelectImage: (id: string) => void;
+  onSelectWall: (id: string) => void;
+  onSelectDoor: (id: string) => void;
+  onSelectRoom: (roomIndex: number) => void;
+  onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
+  onAimTargetChange: (label: string | null) => void;
+}) {
+  const { camera, gl, scene } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const center = useMemo(() => new THREE.Vector2(0, 0), []);
+  const lastAimKey = useRef<string | null>(null);
+  const latestHit = useRef<EditableHit | null>(null);
+
+  function getEditableHit(wallOnly = false) {
+    raycaster.setFromCamera(center, camera);
+    return findEditableHit(raycaster.intersectObjects(scene.children, true), { wallOnly });
+  }
+
+  function setAimLabel(hit: EditableHit | null) {
+    const key = hit ? `${hit.target.kind}:${hit.target.label}` : null;
+
+    if (lastAimKey.current === key) {
+      return;
+    }
+
+    lastAimKey.current = key;
+    onAimTargetChange(hit?.target.label ?? null);
+  }
+
+  function placeOnWall(hit: EditableHit) {
+    const target = hit.target;
+
+    if (target.kind !== "builtWall" && target.kind !== "customWall") {
+      return false;
+    }
+
+    const local = hit.object.worldToLocal(hit.point.clone());
+
+    if (target.kind === "builtWall") {
+      onPlaceImageOnWall(
+        target.wall,
+        local.x,
+        clamp(local.y + room.height / 2, 1.1, room.height - 1.1),
+      );
+      return true;
+    }
+
+    if (target.kind !== "customWall") {
+      return false;
+    }
+
+    const wall = customWalls.find((item) => item.id === target.id);
+    if (!wall) {
+      return false;
+    }
+
+    onPlaceImageOnWall(
+      wall.id,
+      local.x,
+      clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45),
+    );
+    return true;
+  }
+
+  function selectHit(hit: EditableHit) {
+    if (hit.target.kind === "artwork") {
+      onSelectImage(hit.target.id);
+      return;
+    }
+
+    if (hit.target.kind === "customWall") {
+      onSelectWall(hit.target.id);
+      return;
+    }
+
+    if (hit.target.kind === "door") {
+      onSelectDoor(hit.target.id);
+      return;
+    }
+
+    onSelectRoom(hit.target.roomIndex);
+  }
+
+  useFrame(() => {
+    if (!isEditMode || editorViewMode !== "firstPerson") {
+      latestHit.current = null;
+      setAimLabel(null);
+      return;
+    }
+
+    const hit = getEditableHit(Boolean(pendingPlacementImageId));
+    latestHit.current = hit;
+    setAimLabel(hit);
+  });
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+
+    function onPointerDown(event: PointerEvent) {
+      if (
+        !isEditMode ||
+        editorViewMode !== "firstPerson" ||
+        event.button !== 0 ||
+        event.target !== canvas
+      ) {
+        return;
+      }
+
+      const hit = pendingPlacementImageId ? getEditableHit(true) : latestHit.current ?? getEditableHit();
+      if (!hit) {
+        return;
+      }
+
+      if (pendingPlacementImageId && placeOnWall(hit)) {
+        event.preventDefault();
+        return;
+      }
+
+      selectHit(hit);
+    }
+
+    canvas.addEventListener("pointerdown", onPointerDown, true);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [
+    camera,
+    customWalls,
+    editorViewMode,
+    gl,
+    isEditMode,
+    onPlaceImageOnWall,
+    onSelectDoor,
+    onSelectImage,
+    onSelectRoom,
+    onSelectWall,
+    pendingPlacementImageId,
+    raycaster,
+    room.height,
+    scene,
+  ]);
+
+  useEffect(() => {
+    if (!isEditMode || editorViewMode !== "firstPerson") {
+      onAimTargetChange(null);
+      lastAimKey.current = null;
+    }
+  }, [editorViewMode, isEditMode, onAimTargetChange]);
+
+  return null;
+}
+
 function Wall({
   length,
   height,
   position,
   rotation = [0, 0, 0],
   onClick,
+  editableTarget,
 }: {
   length: number;
   height: number;
   position: [number, number, number];
   rotation?: [number, number, number];
   onClick?: (event: ThreeEvent<MouseEvent>) => void;
+  editableTarget?: EditableHitTarget;
 }) {
   return (
-    <mesh position={position} rotation={rotation} receiveShadow onClick={onClick}>
+    <mesh
+      position={position}
+      rotation={rotation}
+      receiveShadow
+      onClick={onClick}
+      userData={editableTarget ? { editableTarget } : undefined}
+    >
       <planeGeometry args={[length, height]} />
       <meshStandardMaterial color="#e7e1d3" roughness={0.88} />
     </mesh>
@@ -1021,6 +1302,11 @@ function CustomWall({
   const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
   const dragPoint = useMemo(() => new THREE.Vector3(), []);
   const isDragging = useRef(false);
+  const editableTarget: EditableHitTarget = {
+    kind: "customWall",
+    id: wall.id,
+    label: wall.name,
+  };
 
   function selectWall() {
     if (isEditMode) {
@@ -1029,12 +1315,21 @@ function CustomWall({
   }
 
   function handleClick(event: ThreeEvent<MouseEvent>) {
-    if (!isEditMode || !pendingPlacementImageId) {
-      selectWall();
+    if (!isEditMode) {
       return;
     }
 
     event.stopPropagation();
+
+    if (editorViewMode === "firstPerson") {
+      return;
+    }
+
+    if (!pendingPlacementImageId) {
+      selectWall();
+      return;
+    }
+
     const local = event.object.worldToLocal(event.point.clone());
     onPlaceImageOnWall(wall.id, local.x, clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45));
   }
@@ -1076,7 +1371,7 @@ function CustomWall({
   return (
     <group position={[xOffset + wall.x, wall.height / 2, wall.z]} rotation={[0, wall.rotation, 0]}>
       {isSelected ? (
-        <mesh position={[0, 0, 0]}>
+        <mesh position={[0, 0, 0]} onClick={handleClick} userData={{ editableTarget }}>
           <boxGeometry args={[wall.length + 0.28, wall.height + 0.18, 0.24]} />
           <meshBasicMaterial color="#f6c453" transparent opacity={0.28} />
         </mesh>
@@ -1089,11 +1384,12 @@ function CustomWall({
         onPointerCancel={stopDrag}
         receiveShadow
         castShadow
+        userData={{ editableTarget }}
       >
         <boxGeometry args={[wall.length, wall.height, 0.18]} />
         <meshStandardMaterial color={isSelected ? "#e7dbc0" : "#ded7c8"} roughness={0.82} />
       </mesh>
-      <mesh position={[0, 0, 0.096]}>
+      <mesh position={[0, 0, 0.096]} onClick={handleClick} userData={{ editableTarget }}>
         <planeGeometry args={[wall.length, wall.height]} />
         <meshStandardMaterial color="#eee8da" roughness={0.9} />
       </mesh>
@@ -1105,6 +1401,7 @@ function CustomWall({
           onPointerMove={drag}
           onPointerUp={stopDrag}
           onPointerCancel={stopDrag}
+          userData={{ editableTarget }}
         >
           <boxGeometry args={[wall.length, 0.08, 0.9]} />
           <meshBasicMaterial
@@ -1124,6 +1421,7 @@ function Door({
   customWalls,
   isEditMode,
   isSelected,
+  editorViewMode,
   onSelectDoor,
 }: {
   door: GalleryDoor;
@@ -1131,6 +1429,7 @@ function Door({
   customWalls: GalleryCustomWall[];
   isEditMode: boolean;
   isSelected: boolean;
+  editorViewMode: EditorViewMode;
   onSelectDoor: (id: string) => void;
 }) {
   const builtWall = parseBuiltWallTarget(door.wall);
@@ -1147,12 +1446,21 @@ function Door({
     return null;
   }
 
+  const editableTarget: EditableHitTarget = {
+    kind: "door",
+    id: door.id,
+    label: door.name,
+  };
+
   function handleClick(event: ThreeEvent<MouseEvent>) {
     if (!isEditMode) {
       return;
     }
 
     event.stopPropagation();
+    if (editorViewMode === "firstPerson") {
+      return;
+    }
     onSelectDoor(door.id);
   }
 
@@ -1165,11 +1473,15 @@ function Door({
             <meshBasicMaterial color="#f6c453" transparent opacity={0.88} />
           </mesh>
         ) : null}
-        <mesh onClick={handleClick}>
+        <mesh onClick={handleClick} userData={{ editableTarget }}>
           <boxGeometry args={[door.width, door.height, 0.16]} />
           <meshStandardMaterial color="#43372d" roughness={0.66} metalness={0.08} />
         </mesh>
-        <mesh position={[door.width * 0.36, 0.04, 0.095]} onClick={handleClick}>
+        <mesh
+          position={[door.width * 0.36, 0.04, 0.095]}
+          onClick={handleClick}
+          userData={{ editableTarget }}
+        >
           <sphereGeometry args={[0.055, 12, 12]} />
           <meshStandardMaterial color="#d2b56d" roughness={0.38} metalness={0.42} />
         </mesh>
@@ -1185,6 +1497,7 @@ function Artwork({
   customWalls,
   isSelected,
   isEditable,
+  editorViewMode,
   onSelect,
 }: {
   image: GalleryImage;
@@ -1193,6 +1506,7 @@ function Artwork({
   customWalls: GalleryCustomWall[];
   isSelected: boolean;
   isEditable: boolean;
+  editorViewMode: EditorViewMode;
   onSelect: () => void;
 }) {
   const builtWall = parseBuiltWallTarget(layout.wall);
@@ -1218,12 +1532,21 @@ function Artwork({
     return null;
   }
 
+  const editableTarget: EditableHitTarget = {
+    kind: "artwork",
+    id: image.id,
+    label: image.name,
+  };
+
   function handleClick(event: ThreeEvent<MouseEvent>) {
     if (!isEditable) {
       return;
     }
 
     event.stopPropagation();
+    if (editorViewMode === "firstPerson") {
+      return;
+    }
     onSelect();
   }
 
@@ -1236,15 +1559,20 @@ function Artwork({
             <meshBasicMaterial color="#f6c453" transparent opacity={0.9} />
           </mesh>
         ) : null}
-        <mesh position={[0, 0, 0.05]} castShadow onClick={handleClick}>
+        <mesh
+          position={[0, 0, 0.05]}
+          castShadow
+          onClick={handleClick}
+          userData={{ editableTarget }}
+        >
           <boxGeometry args={[width + 0.34, height + 0.34, 0.12]} />
           <meshStandardMaterial color="#2f2a22" roughness={0.45} />
         </mesh>
-        <mesh position={[0, 0, 0.13]} onClick={handleClick}>
+        <mesh position={[0, 0, 0.13]} onClick={handleClick} userData={{ editableTarget }}>
           <planeGeometry args={[width + 0.1, height + 0.1]} />
           <meshStandardMaterial color="#f7f1e4" roughness={0.72} />
         </mesh>
-        <mesh position={[0, 0, 0.2]} onClick={handleClick}>
+        <mesh position={[0, 0, 0.2]} onClick={handleClick} userData={{ editableTarget }}>
           <planeGeometry args={[width, height]} />
           <meshBasicMaterial map={texture} toneMapped={false} />
         </mesh>
@@ -1315,6 +1643,7 @@ export default function GalleryScene({
   onUpdateCustomWall,
   onUpdateDoor,
   onPlaceImageOnWall,
+  onAimTargetChange,
 }: GallerySceneProps) {
   const isEditMode = mode === "edit";
   const useTopdownEditor = isEditMode && editorViewMode === "topdown";
@@ -1389,6 +1718,7 @@ export default function GalleryScene({
           customWalls={customWalls}
           isEditMode={isEditMode}
           isSelected={selectedDoorId === door.id}
+          editorViewMode={editorViewMode}
           onSelectDoor={onSelectDoor}
         />
       ))}
@@ -1402,6 +1732,7 @@ export default function GalleryScene({
             customWalls={customWalls}
             isSelected={isEditMode && selectedImageId === image.id}
             isEditable={isEditMode}
+            editorViewMode={editorViewMode}
             onSelect={() => onSelectImage(image.id)}
           />
         ))
@@ -1418,20 +1749,35 @@ export default function GalleryScene({
           />
           <PlayerMovement room={roomConfig} settings={editorSettings} />
           {isEditMode ? (
-            <FirstPersonAimFollower
-              room={roomConfig}
-              customWalls={customWalls}
-              layouts={layouts}
-              doors={doors}
-              selectedImageId={selectedImageId}
-              selectedWallId={selectedWallId}
-              selectedDoorId={selectedDoorId}
-              transformTool={transformTool}
-              isGrabActive={isGrabActive}
-              onUpdateImageLayout={onUpdateImageLayout}
-              onUpdateCustomWall={onUpdateCustomWall}
-              onUpdateDoor={onUpdateDoor}
-            />
+            <>
+              <FirstPersonEditorPicker
+                isEditMode={isEditMode}
+                editorViewMode={editorViewMode}
+                pendingPlacementImageId={pendingPlacementImageId}
+                room={roomConfig}
+                customWalls={customWalls}
+                onSelectImage={onSelectImage}
+                onSelectWall={onSelectWall}
+                onSelectDoor={onSelectDoor}
+                onSelectRoom={onSelectRoom}
+                onPlaceImageOnWall={onPlaceImageOnWall}
+                onAimTargetChange={onAimTargetChange}
+              />
+              <FirstPersonAimFollower
+                room={roomConfig}
+                customWalls={customWalls}
+                layouts={layouts}
+                doors={doors}
+                selectedImageId={selectedImageId}
+                selectedWallId={selectedWallId}
+                selectedDoorId={selectedDoorId}
+                transformTool={transformTool}
+                isGrabActive={isGrabActive}
+                onUpdateImageLayout={onUpdateImageLayout}
+                onUpdateCustomWall={onUpdateCustomWall}
+                onUpdateDoor={onUpdateDoor}
+              />
+            </>
           ) : null}
         </>
       )}

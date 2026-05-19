@@ -176,6 +176,33 @@ button {
   background: #79d7b6;
 }
 
+.edit-crosshair.targeted::before,
+.edit-crosshair.targeted::after {
+  background: rgba(121, 215, 182, 0.92);
+}
+
+.edit-crosshair strong {
+  position: absolute;
+  left: 50%;
+  top: 28px;
+  min-width: 86px;
+  max-width: 190px;
+  padding: 5px 8px;
+  border: 1px solid rgba(121, 215, 182, 0.42);
+  border-radius: 6px;
+  color: #f7fff9;
+  background: rgba(18, 27, 24, 0.74);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: translateX(-50%);
+  backdrop-filter: blur(10px);
+}
+
 .control-panel {
   display: flex;
   flex-direction: column;

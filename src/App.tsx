@@ -245,6 +245,7 @@ function App() {
   const [capturingShortcut, setCapturingShortcut] = useState<EditorShortcutAction | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGrabActive, setIsGrabActive] = useState(false);
+  const [aimTargetLabel, setAimTargetLabel] = useState<string | null>(null);
   const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
   const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("topdown");
@@ -371,8 +372,16 @@ function App() {
   }, [editorViewMode, mode, transformTool]);
 
   useEffect(() => {
-    setIsGrabActive(false);
+    if (!selectedObject) {
+      setIsGrabActive(false);
+    }
   }, [selectedObject]);
+
+  useEffect(() => {
+    if (mode !== "edit" || editorViewMode !== "firstPerson") {
+      setAimTargetLabel(null);
+    }
+  }, [editorViewMode, mode]);
 
   useEffect(() => {
     setSelectedRoomIndex((current) => clamp(Math.round(current), 0, roomConfig.roomCount - 1));
@@ -1078,10 +1087,18 @@ function App() {
           onUpdateCustomWall={updateCustomWall}
           onUpdateDoor={updateDoor}
           onPlaceImageOnWall={placePendingImage}
+          onAimTargetChange={setAimTargetLabel}
         />
         {mode === "edit" ? (
-          <div className={`edit-crosshair ${editorViewMode === "firstPerson" ? "active" : ""}`}>
+          <div
+            className={`edit-crosshair ${editorViewMode === "firstPerson" ? "active" : ""} ${
+              aimTargetLabel ? "targeted" : ""
+            }`}
+          >
             <span />
+            {editorViewMode === "firstPerson" && aimTargetLabel ? (
+              <strong>{pendingPlacementIds[0] ? `挂到 ${aimTargetLabel}` : aimTargetLabel}</strong>
+            ) : null}
           </div>
         ) : null}
         <div className="floating-mode-switch" aria-label="Mode switch">
@@ -1223,7 +1240,7 @@ function App() {
               <strong>
                 {editorViewMode === "topdown"
                   ? "拖动画布平移，滚轮缩放俯视图"
-                  : "点击画布锁定视角，WASD 移动，Shift 疾跑"}
+                  : "点击画布锁定视角，准星对准对象后点击选中"}
               </strong>
               <span>挂画</span>
               <strong>
@@ -1300,7 +1317,9 @@ function App() {
             ) : null}
 
             {!selectedObject ? (
-              <p className="empty-inspector">点击画作、墙壁、门或房间开始编辑。</p>
+              <p className="empty-inspector">
+                俯视下点击对象编辑；第一人称下把准星对准画作、门或墙壁后点击即可选中。
+              </p>
             ) : null}
 
             {selectedObject?.type === "artwork" && selectedImage && selectedLayout ? (
