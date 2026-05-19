@@ -1,12 +1,11 @@
 import {
   Eye,
-  DoorOpen,
+  Box,
   ImagePlus,
   Loader2,
   Maximize2,
   Move,
   Pencil,
-  Plus,
   RotateCcw,
   Ruler,
   Trash2,
@@ -44,6 +43,7 @@ import {
 import { createSampleImages } from "./lib/sampleArt";
 import type {
   AppMode,
+  BuilderPlacementTarget,
   EditorSettings,
   EditorShortcutAction,
   EditorTransformTool,
@@ -65,6 +65,7 @@ type EditableSelection =
   | { type: "room"; roomIndex: number };
 
 const shortcutLabels: Record<EditorShortcutAction, string> = {
+  openMarket: "打开组件市场",
   toggleView: "切换视角",
   moveTool: "移动工具",
   rotateTool: "旋转工具",
@@ -246,6 +247,8 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGrabActive, setIsGrabActive] = useState(false);
   const [aimTargetLabel, setAimTargetLabel] = useState<string | null>(null);
+  const [builderPlacement, setBuilderPlacement] = useState<BuilderPlacementTarget | null>(null);
+  const [isComponentMarketOpen, setIsComponentMarketOpen] = useState(false);
   const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
   const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("topdown");
@@ -382,6 +385,12 @@ function App() {
       setAimTargetLabel(null);
     }
   }, [editorViewMode, mode]);
+
+  useEffect(() => {
+    if (mode !== "edit") {
+      setIsComponentMarketOpen(false);
+    }
+  }, [mode]);
 
   useEffect(() => {
     setSelectedRoomIndex((current) => clamp(Math.round(current), 0, roomConfig.roomCount - 1));
@@ -584,10 +593,63 @@ function App() {
     ];
   }
 
+  function getBuilderPlacement() {
+    const roomIndex = clamp(
+      Math.round(builderPlacement?.roomIndex ?? selectedRoomIndex),
+      0,
+      roomConfig.roomCount - 1,
+    );
+
+    return {
+      roomIndex,
+      x: clamp(builderPlacement?.x ?? 0, -roomConfig.width / 2 + 1, roomConfig.width / 2 - 1),
+      z: clamp(builderPlacement?.z ?? 0, -roomConfig.depth / 2 + 1, roomConfig.depth / 2 - 1),
+      wall: builderPlacement?.wall,
+      wallOffset: builderPlacement?.wallOffset,
+    };
+  }
+
+  function closeComponentMarket() {
+    setIsComponentMarketOpen(false);
+  }
+
+  function openComponentMarket() {
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+
+    setIsComponentMarketOpen(true);
+  }
+
+  function toggleComponentMarket() {
+    setIsComponentMarketOpen((current) => {
+      if (current) {
+        return false;
+      }
+
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
+      }
+
+      return true;
+    });
+  }
+
   function addRoom() {
-    updateRoomConfig({ roomCount: roomConfig.roomCount + 1 });
+    if (roomConfig.roomCount >= 5) {
+      setMessage("最多支持 5 个房间");
+      closeComponentMarket();
+      return;
+    }
+
+    const nextRoomNumber = roomConfig.roomCount + 1;
+    setRoomConfig((current) => ({
+      ...current,
+      roomCount: Math.round(clamp(current.roomCount + 1, 1, 5)),
+    }));
     selectRoom(roomConfig.roomCount);
-    setMessage(`已新增房间 ${roomConfig.roomCount + 1}`);
+    closeComponentMarket();
+    setMessage(`已新增房间 ${nextRoomNumber}`);
   }
 
   function deleteRoom(roomIndex: number) {
@@ -661,13 +723,13 @@ function App() {
   }
 
   function addCustomWall() {
-    const roomIndex = selectedRoomIndex;
+    const placement = getBuilderPlacement();
     const wall: GalleryCustomWall = {
       id: `wall-${crypto.randomUUID()}`,
       name: `自定义墙 ${customWalls.length + 1}`,
-      roomIndex,
-      x: 0,
-      z: 0,
+      roomIndex: placement.roomIndex,
+      x: placement.x,
+      z: placement.z,
       length: Math.min(7, roomConfig.width - 2),
       height: Math.min(roomConfig.height - 0.3, 4.8),
       rotation: 0,
@@ -675,6 +737,7 @@ function App() {
 
     setCustomWalls((current) => [...current, wall]);
     selectWall(wall.id);
+    closeComponentMarket();
     setMessage(`已新增 ${wall.name}`);
   }
 
@@ -719,19 +782,21 @@ function App() {
   }
 
   function addDoor() {
-    const wall = selectedWallId ?? builtWallTarget(selectedRoomIndex, "north");
+    const placement = getBuilderPlacement();
+    const wall = placement.wall ?? selectedWallId ?? builtWallTarget(placement.roomIndex, "north");
     const door: GalleryDoor = {
       id: `door-${crypto.randomUUID()}`,
       name: `门 ${doors.length + 1}`,
       roomIndex: getDoorRoomIndex(wall),
       wall,
-      offset: 0,
+      offset: placement.wallOffset ?? 0,
       width: 1.55,
       height: Math.min(2.35, roomConfig.height - 0.6),
     };
 
     setDoors((current) => [...current, door]);
     selectDoor(door.id);
+    closeComponentMarket();
     setMessage(`已新增 ${door.name}`);
   }
 
@@ -922,6 +987,11 @@ function App() {
     : undefined;
   const selectedDoor = selectedDoorId ? doors.find((door) => door.id === selectedDoorId) : undefined;
   const selectedRoomLabel = `房间 ${selectedRoomIndex + 1}`;
+  const builderPlacementSummary = builderPlacement
+    ? builderPlacement.wall
+      ? `${builderPlacement.label ?? "墙面"} · 偏移 ${(builderPlacement.wallOffset ?? 0).toFixed(1)}`
+      : `房间 ${builderPlacement.roomIndex + 1} · X ${builderPlacement.x.toFixed(1)} · Z ${builderPlacement.z.toFixed(1)}`
+    : `房间 ${selectedRoomIndex + 1} · 默认位置`;
 
   useEffect(() => {
     if (mode !== "edit") {
@@ -962,12 +1032,20 @@ function App() {
       ) as [EditorShortcutAction, string] | undefined;
 
       if (!shortcutEntry) {
+        if (event.code === "Escape") {
+          setIsComponentMarketOpen(false);
+        }
         return;
       }
 
       const action = shortcutEntry[0];
       event.preventDefault();
       event.stopImmediatePropagation();
+
+      if (action === "openMarket") {
+        toggleComponentMarket();
+        return;
+      }
 
       if (action === "moveTool") {
         setTransformTool("move");
@@ -1088,6 +1166,7 @@ function App() {
           onUpdateDoor={updateDoor}
           onPlaceImageOnWall={placePendingImage}
           onAimTargetChange={setAimTargetLabel}
+          onBuilderPlacementChange={setBuilderPlacement}
         />
         {mode === "edit" ? (
           <div
@@ -1252,6 +1331,7 @@ function App() {
               <strong>从组件市场添加房间、墙壁、门，再选择对象调整参数</strong>
             </div>
             <div className="shortcut-grid" aria-label="Editor shortcuts">
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.openMarket)}</kbd> 组件市场</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.toggleView)}</kbd> 切换视角</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.moveTool)}</kbd> 移动</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.rotateTool)}</kbd> 旋转</span>
@@ -1814,32 +1894,16 @@ function App() {
               ))}
             </div>
 
-            <div className="component-market" aria-label="Component market">
-              <div className="market-heading">
-                <strong>组件市场</strong>
-                <span>添加到房间 {selectedRoomIndex + 1}</span>
-              </div>
-              <button type="button" className="market-item" onClick={addRoom}>
-                <Plus size={18} />
-                <strong>房间</strong>
-                <span>扩展连续展厅空间</span>
-              </button>
-              <button type="button" className="market-item" onClick={addCustomWall}>
-                <Ruler size={18} />
-                <strong>墙壁</strong>
-                <span>可拖拽、旋转、调整长度</span>
-              </button>
-              <button type="button" className="market-item" onClick={addDoor}>
-                <DoorOpen size={18} />
-                <strong>门</strong>
-                <span>挂到墙面形成门位</span>
-              </button>
-              <button type="button" className="market-item" disabled title="后续可扩展展台对象">
-                <Maximize2 size={18} />
-                <strong>展台</strong>
-                <span>后续扩展陈列物件</span>
-              </button>
-            </div>
+            <button
+              type="button"
+              className="tool-button component-market-trigger"
+              onClick={openComponentMarket}
+            >
+              <Box size={18} />
+              <span>组件市场 ({formatKeyCode(editorSettings.shortcuts.openMarket)})</span>
+            </button>
+
+            <p className="placement-note">建造点：{builderPlacementSummary}</p>
 
             {pendingPlacementIds.length > 0 ? (
               <p className="placement-note">待放置 {pendingPlacementIds.length} 张：点击任意墙面挂画</p>
@@ -1893,6 +1957,53 @@ function App() {
           )}
         </div>
       </aside>
+
+      {mode === "edit" && isComponentMarketOpen ? (
+        <div className="market-overlay" role="dialog" aria-modal="true" aria-label="Component market">
+          <div className="market-modal">
+            <div className="market-modal-header">
+              <div>
+                <strong>组件市场</strong>
+                <span>{builderPlacementSummary}</span>
+              </div>
+              <button type="button" className="icon-button" onClick={closeComponentMarket} title="关闭">
+                ×
+              </button>
+            </div>
+
+            <div className="market-modal-grid">
+              <button type="button" className="build-card" onClick={addRoom}>
+                <span className="build-preview preview-room" aria-hidden="true">
+                  <i />
+                </span>
+                <strong>房间</strong>
+                <span>扩展连续展厅空间</span>
+              </button>
+              <button type="button" className="build-card" onClick={addCustomWall}>
+                <span className="build-preview preview-wall" aria-hidden="true">
+                  <i />
+                </span>
+                <strong>墙壁</strong>
+                <span>生成在当前光标点</span>
+              </button>
+              <button type="button" className="build-card" onClick={addDoor}>
+                <span className="build-preview preview-door" aria-hidden="true">
+                  <i />
+                </span>
+                <strong>门</strong>
+                <span>挂到当前准星墙面</span>
+              </button>
+              <button type="button" className="build-card" disabled title="后续可扩展展台对象">
+                <span className="build-preview preview-plinth" aria-hidden="true">
+                  <i />
+                </span>
+                <strong>展台</strong>
+                <span>后续扩展陈列物件</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }

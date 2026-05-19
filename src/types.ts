@@ -3,6 +3,7 @@ export type AppMode = "view" | "edit";
 export type EditorViewMode = "topdown" | "firstPerson";
 export type EditorTransformTool = "move" | "rotate" | "scale";
 export type EditorShortcutAction =
+  | "openMarket"
   | "toggleView"
   | "moveTool"
   | "rotateTool"
@@ -70,6 +71,16 @@ export interface GalleryDoor {
   offset: number;
   width: number;
   height: number;
+}
+
+export interface BuilderPlacementTarget {
+  roomIndex: number;
+  x: number;
+  z: number;
+  wall?: GalleryWallTarget;
+  wallOffset?: number;
+  wallHeight?: number;
+  label?: string;
 }
 
 export interface EditorSettings {

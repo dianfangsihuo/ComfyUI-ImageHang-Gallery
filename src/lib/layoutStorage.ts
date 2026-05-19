@@ -21,6 +21,7 @@ export const defaultRoomConfig: GalleryRoomConfig = {
 
 export const defaultEditorSettings: EditorSettings = {
   shortcuts: {
+    openMarket: "KeyB",
     toggleView: "KeyV",
     moveTool: "KeyG",
     rotateTool: "KeyR",

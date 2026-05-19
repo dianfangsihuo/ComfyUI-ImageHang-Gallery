@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type {
   AppMode,
+  BuilderPlacementTarget,
   EditorSettings,
   EditorTransformTool,
   EditorViewMode,
@@ -41,6 +42,7 @@ interface GallerySceneProps {
   onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
   onAimTargetChange: (label: string | null) => void;
+  onBuilderPlacementChange: (target: BuilderPlacementTarget | null) => void;
 }
 
 type EditableHitTarget =
@@ -165,6 +167,38 @@ function getAllWallTargets(room: GalleryRoomConfig, customWalls: GalleryCustomWa
   ).flat();
 
   return [...builtTargets, ...customWalls.map((wall) => wall.id)];
+}
+
+function getRoomIndexAtWorldX(room: GalleryRoomConfig, worldX: number) {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+
+  for (let roomIndex = 0; roomIndex < room.roomCount; roomIndex += 1) {
+    const distance = Math.abs(worldX - roomOffset(room, roomIndex));
+
+    if (distance < bestDistance) {
+      bestIndex = roomIndex;
+      bestDistance = distance;
+    }
+  }
+
+  return bestIndex;
+}
+
+function getPlacementFromWorldPoint(
+  room: GalleryRoomConfig,
+  point: THREE.Vector3,
+  wallHit?: Pick<BuilderPlacementTarget, "wall" | "wallOffset" | "wallHeight" | "label">,
+): BuilderPlacementTarget {
+  const roomIndex = getRoomIndexAtWorldX(room, point.x);
+  const xOffset = roomOffset(room, roomIndex);
+
+  return {
+    roomIndex,
+    x: clamp(point.x - xOffset, -room.width / 2 + 1, room.width / 2 - 1),
+    z: clamp(point.z, -room.depth / 2 + 1, room.depth / 2 - 1),
+    ...wallHit,
+  };
 }
 
 function defaultWidthFor(image: GalleryImage) {
@@ -409,6 +443,7 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
   const zoomHeight = useRef(26);
   const isPanning = useRef(false);
   const pointerId = useRef<number | null>(null);
+  const hasInitialized = useRef(false);
 
   const applyCamera = () => {
     const center = target.current;
@@ -434,16 +469,25 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
       document.exitPointerLock();
     }
 
-    const centerX = roomOffset(room, room.roomCount - 1) / 2;
-    target.current.set(centerX, 0, 0);
+    if (!hasInitialized.current) {
+      const centerX = roomOffset(room, room.roomCount - 1) / 2;
+      target.current.set(centerX, 0, 0);
+      hasInitialized.current = true;
+    }
+
     zoomHeight.current = THREE.MathUtils.clamp(
-      Math.max(room.width, room.depth, room.roomCount * 8) * 1.25,
+      Math.max(room.width, room.depth) * 1.25,
       18,
       52,
     );
     camera.rotation.order = "YXZ";
     applyCamera();
-  }, [camera, gl, room.depth, room.height, room.roomCount, room.width]);
+  }, [camera, gl, room.depth, room.height, room.width]);
+
+  useEffect(() => {
+    clampTarget();
+    applyCamera();
+  }, [room.roomCount, room.width, room.depth]);
 
   useEffect(() => {
     const canvas = gl.domElement;
@@ -511,6 +555,85 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
   useFrame(() => {
     applyCamera();
   });
+
+  return null;
+}
+
+function TopdownBuilderPlacementTracker({
+  isEditMode,
+  editorViewMode,
+  room,
+  onBuilderPlacementChange,
+}: {
+  isEditMode: boolean;
+  editorViewMode: EditorViewMode;
+  room: GalleryRoomConfig;
+  onBuilderPlacementChange: (target: BuilderPlacementTarget | null) => void;
+}) {
+  const { camera, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const pointer = useMemo(() => new THREE.Vector2(), []);
+  const floorPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const hitPoint = useMemo(() => new THREE.Vector3(), []);
+  const lastKey = useRef<string | null>(null);
+
+  function emitPlacement(target: BuilderPlacementTarget | null) {
+    const key = target
+      ? `${target.roomIndex}:${target.x.toFixed(2)}:${target.z.toFixed(2)}`
+      : null;
+
+    if (lastKey.current === key) {
+      return;
+    }
+
+    lastKey.current = key;
+    onBuilderPlacementChange(target);
+  }
+
+  useEffect(() => {
+    if (!isEditMode || editorViewMode !== "topdown") {
+      emitPlacement(null);
+      return;
+    }
+
+    const canvas = gl.domElement;
+
+    function updateFromPointer(event: PointerEvent | MouseEvent) {
+      if (event.target !== canvas) {
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+
+      if (raycaster.ray.intersectPlane(floorPlane, hitPoint)) {
+        emitPlacement(getPlacementFromWorldPoint(room, hitPoint));
+      }
+    }
+
+    canvas.addEventListener("pointermove", updateFromPointer);
+    canvas.addEventListener("pointerdown", updateFromPointer);
+    canvas.addEventListener("mousemove", updateFromPointer);
+
+    return () => {
+      canvas.removeEventListener("pointermove", updateFromPointer);
+      canvas.removeEventListener("pointerdown", updateFromPointer);
+      canvas.removeEventListener("mousemove", updateFromPointer);
+    };
+  }, [
+    camera,
+    editorViewMode,
+    floorPlane,
+    gl,
+    hitPoint,
+    isEditMode,
+    onBuilderPlacementChange,
+    pointer,
+    raycaster,
+    room,
+  ]);
 
   return null;
 }
@@ -1087,6 +1210,7 @@ function FirstPersonEditorPicker({
   onSelectRoom,
   onPlaceImageOnWall,
   onAimTargetChange,
+  onBuilderPlacementChange,
 }: {
   isEditMode: boolean;
   editorViewMode: EditorViewMode;
@@ -1099,11 +1223,16 @@ function FirstPersonEditorPicker({
   onSelectRoom: (roomIndex: number) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
   onAimTargetChange: (label: string | null) => void;
+  onBuilderPlacementChange: (target: BuilderPlacementTarget | null) => void;
 }) {
   const { camera, gl, scene } = useThree();
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
   const center = useMemo(() => new THREE.Vector2(0, 0), []);
+  const floorPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const floorHit = useMemo(() => new THREE.Vector3(), []);
+  const direction = useMemo(() => new THREE.Vector3(), []);
   const lastAimKey = useRef<string | null>(null);
+  const lastPlacementKey = useRef<string | null>(null);
   const latestHit = useRef<EditableHit | null>(null);
 
   function getEditableHit(wallOnly = false) {
@@ -1120,6 +1249,70 @@ function FirstPersonEditorPicker({
 
     lastAimKey.current = key;
     onAimTargetChange(hit?.target.label ?? null);
+  }
+
+  function emitBuilderPlacement(target: BuilderPlacementTarget | null) {
+    const key = target
+      ? [
+          target.roomIndex,
+          target.x.toFixed(2),
+          target.z.toFixed(2),
+          target.wall ?? "",
+          target.wallOffset?.toFixed(2) ?? "",
+        ].join(":")
+      : null;
+
+    if (lastPlacementKey.current === key) {
+      return;
+    }
+
+    lastPlacementKey.current = key;
+    onBuilderPlacementChange(target);
+  }
+
+  function getBuilderPlacement(hit: EditableHit | null) {
+    if (hit) {
+      const basePoint = hit.point.clone();
+      const target = hit.target;
+
+      if (target.kind === "builtWall") {
+        const local = hit.object.worldToLocal(hit.point.clone());
+        return getPlacementFromWorldPoint(room, basePoint, {
+          wall: target.wall,
+          wallOffset: local.x,
+          wallHeight: clamp(local.y + room.height / 2, 1.1, room.height - 1.1),
+          label: target.label,
+        });
+      }
+
+      if (target.kind === "customWall") {
+        const wall = customWalls.find((item) => item.id === target.id);
+        const local = hit.object.worldToLocal(hit.point.clone());
+
+        if (wall) {
+          return getPlacementFromWorldPoint(room, basePoint, {
+            wall: wall.id,
+            wallOffset: local.x,
+            wallHeight: clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45),
+            label: wall.name,
+          });
+        }
+      }
+
+      return getPlacementFromWorldPoint(room, basePoint);
+    }
+
+    camera.getWorldDirection(direction);
+    const ray = raycaster.ray;
+    ray.set(camera.position, direction);
+
+    if (ray.intersectPlane(floorPlane, floorHit)) {
+      return getPlacementFromWorldPoint(room, floorHit);
+    }
+
+    const fallbackPoint = camera.position.clone().addScaledVector(direction, 4);
+    fallbackPoint.y = 0;
+    return getPlacementFromWorldPoint(room, fallbackPoint);
   }
 
   function placeOnWall(hit: EditableHit) {
@@ -1184,8 +1377,13 @@ function FirstPersonEditorPicker({
     }
 
     const hit = getEditableHit(Boolean(pendingPlacementImageId));
+    const placementHit =
+      hit?.target.kind === "builtWall" || hit?.target.kind === "customWall"
+        ? hit
+        : getEditableHit(true) ?? hit;
     latestHit.current = hit;
     setAimLabel(hit);
+    emitBuilderPlacement(getBuilderPlacement(placementHit));
   });
 
   useEffect(() => {
@@ -1239,9 +1437,11 @@ function FirstPersonEditorPicker({
   useEffect(() => {
     if (!isEditMode || editorViewMode !== "firstPerson") {
       onAimTargetChange(null);
+      onBuilderPlacementChange(null);
       lastAimKey.current = null;
+      lastPlacementKey.current = null;
     }
-  }, [editorViewMode, isEditMode, onAimTargetChange]);
+  }, [editorViewMode, isEditMode, onAimTargetChange, onBuilderPlacementChange]);
 
   return null;
 }
@@ -1644,6 +1844,7 @@ export default function GalleryScene({
   onUpdateDoor,
   onPlaceImageOnWall,
   onAimTargetChange,
+  onBuilderPlacementChange,
 }: GallerySceneProps) {
   const isEditMode = mode === "edit";
   const useTopdownEditor = isEditMode && editorViewMode === "topdown";
@@ -1740,7 +1941,15 @@ export default function GalleryScene({
         <EmptyFrames count={6} room={roomConfig} />
       )}
       {useTopdownEditor ? (
-        <EditorCameraControls room={roomConfig} />
+        <>
+          <EditorCameraControls room={roomConfig} />
+          <TopdownBuilderPlacementTracker
+            isEditMode={isEditMode}
+            editorViewMode={editorViewMode}
+            room={roomConfig}
+            onBuilderPlacementChange={onBuilderPlacementChange}
+          />
+        </>
       ) : (
         <>
           <FirstPersonLookControls
@@ -1762,6 +1971,7 @@ export default function GalleryScene({
                 onSelectRoom={onSelectRoom}
                 onPlaceImageOnWall={onPlaceImageOnWall}
                 onAimTargetChange={onAimTargetChange}
+                onBuilderPlacementChange={onBuilderPlacementChange}
               />
               <FirstPersonAimFollower
                 room={roomConfig}
