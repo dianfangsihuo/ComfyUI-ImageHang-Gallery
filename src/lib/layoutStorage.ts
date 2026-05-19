@@ -17,6 +17,7 @@ export const defaultRoomConfig: GalleryRoomConfig = {
   depth: 22,
   height: 5.2,
   roomCount: 1,
+  rooms: [{ width: 18, depth: 22, height: 5.2 }],
 };
 
 export const defaultEditorSettings: EditorSettings = {
@@ -76,13 +77,29 @@ export function loadStoredRoomConfig(): GalleryRoomConfig {
 
     const parsed = JSON.parse(raw) as GalleryRoomConfig;
 
+    const width = Number.isFinite(parsed.width) ? parsed.width : defaultRoomConfig.width;
+    const depth = Number.isFinite(parsed.depth) ? parsed.depth : defaultRoomConfig.depth;
+    const height = Number.isFinite(parsed.height) ? parsed.height : defaultRoomConfig.height;
+    const roomCount = Number.isFinite(parsed.roomCount)
+      ? Math.min(5, Math.max(1, Math.round(parsed.roomCount)))
+      : defaultRoomConfig.roomCount;
+    const parsedRooms = Array.isArray(parsed.rooms) ? parsed.rooms : [];
+    const rooms = Array.from({ length: roomCount }, (_, index) => {
+      const room = parsedRooms[index] as Partial<GalleryRoomConfig> | undefined;
+
+      return {
+        width: clampNumber(room?.width, width, 4, 40),
+        depth: clampNumber(room?.depth, depth, 6, 48),
+        height: clampNumber(room?.height, height, 3.2, 9),
+      };
+    });
+
     return {
-      width: Number.isFinite(parsed.width) ? parsed.width : defaultRoomConfig.width,
-      depth: Number.isFinite(parsed.depth) ? parsed.depth : defaultRoomConfig.depth,
-      height: Number.isFinite(parsed.height) ? parsed.height : defaultRoomConfig.height,
-      roomCount: Number.isFinite(parsed.roomCount)
-        ? Math.min(5, Math.max(1, Math.round(parsed.roomCount)))
-        : defaultRoomConfig.roomCount,
+      width,
+      depth,
+      height,
+      roomCount,
+      rooms,
     };
   } catch {
     return defaultRoomConfig;

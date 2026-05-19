@@ -50,6 +50,13 @@ export interface GalleryRoomConfig {
   depth: number;
   height: number;
   roomCount: number;
+  rooms?: GalleryRoomDimensions[];
+}
+
+export interface GalleryRoomDimensions {
+  width: number;
+  depth: number;
+  height: number;
 }
 
 export interface GalleryCustomWall {
@@ -71,6 +78,8 @@ export interface GalleryDoor {
   offset: number;
   width: number;
   height: number;
+  isOpen?: boolean;
+  connectsToRoomIndex?: number | null;
 }
 
 export interface BuilderPlacementTarget {

@@ -1,4 +1,5 @@
 import {
+  DoorOpen,
   Eye,
   Box,
   ImagePlus,
@@ -54,6 +55,7 @@ import type {
   GalleryImage,
   GalleryLayouts,
   GalleryRoomConfig,
+  GalleryRoomDimensions,
   GalleryWall,
   GalleryWallTarget,
 } from "./types";
@@ -114,8 +116,17 @@ function builtWallTarget(roomIndex: number, wall: GalleryWall): GalleryWallTarge
   return roomIndex === 0 ? wall : `room-${roomIndex}:${wall}`;
 }
 
-function getWallLength(room: GalleryRoomConfig, wall: GalleryWall) {
-  return wall === "north" || wall === "south" ? room.width : room.depth;
+function getRoomDimensions(room: GalleryRoomConfig, roomIndex: number): GalleryRoomDimensions {
+  return room.rooms?.[roomIndex] ?? {
+    width: room.width,
+    depth: room.depth,
+    height: room.height,
+  };
+}
+
+function getWallLength(room: GalleryRoomConfig, wall: GalleryWall, roomIndex = 0) {
+  const dimensions = getRoomDimensions(room, roomIndex);
+  return wall === "north" || wall === "south" ? dimensions.width : dimensions.depth;
 }
 
 function getWallTargetLength(
@@ -126,7 +137,7 @@ function getWallTargetLength(
   const built = parseBuiltWallTarget(target);
 
   if (built) {
-    return getWallLength(room, built.wall);
+    return getWallLength(room, built.wall, built.roomIndex);
   }
 
   return customWalls.find((wall) => wall.id === target)?.length ?? room.width;
@@ -137,6 +148,12 @@ function getWallTargetHeight(
   customWalls: GalleryCustomWall[],
   target: GalleryWallTarget,
 ) {
+  const built = parseBuiltWallTarget(target);
+
+  if (built) {
+    return getRoomDimensions(room, built.roomIndex).height;
+  }
+
   return customWalls.find((wall) => wall.id === target)?.height ?? room.height;
 }
 
@@ -187,6 +204,10 @@ function clampSetting(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
+function getRoomList(config: GalleryRoomConfig, count = config.roomCount) {
+  return Array.from({ length: count }, (_, index) => getRoomDimensions(config, index));
+}
+
 function calculateGalleryCapacity(
   room: GalleryRoomConfig,
   customWalls: GalleryCustomWall[],
@@ -208,9 +229,6 @@ function calculateGalleryCapacity(
         images.length
       : 1.42;
   const averageHeight = averageWidth / averageAspect;
-  const usableHeight = Math.max(0, room.height - 1.4 - 0.85);
-  const rows = Math.max(1, Math.floor((usableHeight + verticalGap) / (averageHeight + verticalGap)));
-
   const builtinTargets = Array.from({ length: room.roomCount }, (_, roomIndex) =>
     builtWallOptions.map(([wall]) => builtWallTarget(roomIndex, wall)),
   ).flat();
@@ -218,6 +236,11 @@ function calculateGalleryCapacity(
 
   return allTargets.reduce((total, target) => {
     const usableLength = Math.max(0, getWallTargetLength(room, customWalls, target) - 2.4);
+    const usableHeight = Math.max(0, getWallTargetHeight(room, customWalls, target) - 1.4 - 0.85);
+    const rows = Math.max(
+      1,
+      Math.floor((usableHeight + verticalGap) / (averageHeight + verticalGap)),
+    );
     const columns = Math.max(
       0,
       Math.floor((usableLength + horizontalGap) / (averageWidth + horizontalGap)),
@@ -527,11 +550,24 @@ function App() {
 
   function updateRoomConfig(patch: Partial<GalleryRoomConfig>) {
     setRoomConfig((current) => {
+      const roomCount = Math.round(clamp(patch.roomCount ?? current.roomCount, 1, 5));
+      const rooms = getRoomList(current, roomCount).map((room, index) => {
+        if (index !== selectedRoomIndex || patch.roomCount !== undefined) {
+          return room;
+        }
+
+        return {
+          width: clamp(patch.width ?? room.width, 4, 40),
+          depth: clamp(patch.depth ?? room.depth, 6, 48),
+          height: clamp(patch.height ?? room.height, 3.2, 9),
+        };
+      });
       const next = {
-        width: clamp(patch.width ?? current.width, 12, 36),
-        depth: clamp(patch.depth ?? current.depth, 14, 44),
-        height: clamp(patch.height ?? current.height, 4.2, 8),
-        roomCount: Math.round(clamp(patch.roomCount ?? current.roomCount, 1, 5)),
+        width: rooms[0]?.width ?? current.width,
+        depth: rooms[0]?.depth ?? current.depth,
+        height: rooms[0]?.height ?? current.height,
+        roomCount,
+        rooms,
       };
 
       setLayouts((currentLayouts) =>
@@ -553,14 +589,19 @@ function App() {
       );
 
       setCustomWalls((currentWalls) =>
-        currentWalls.map((wall) => ({
-          ...wall,
-          roomIndex: Math.min(wall.roomIndex, next.roomCount - 1),
-          x: clamp(wall.x, -next.width / 2 + 1, next.width / 2 - 1),
-          z: clamp(wall.z, -next.depth / 2 + 1, next.depth / 2 - 1),
-          length: clamp(wall.length, 2, next.width - 1),
-          height: clamp(wall.height, 2.2, next.height - 0.35),
-        })),
+        currentWalls.map((wall) => {
+          const roomIndex = Math.min(wall.roomIndex, next.roomCount - 1);
+          const dimensions = getRoomDimensions(next, roomIndex);
+
+          return {
+            ...wall,
+            roomIndex,
+            x: clamp(wall.x, -dimensions.width / 2 + 1, dimensions.width / 2 - 1),
+            z: clamp(wall.z, -dimensions.depth / 2 + 1, dimensions.depth / 2 - 1),
+            length: clamp(wall.length, 2, dimensions.width - 0.6),
+            height: clamp(wall.height, 2.2, dimensions.height - 0.35),
+          };
+        }),
       );
       setDoors((currentDoors) =>
         currentDoors.map((door) => ({
@@ -571,7 +612,7 @@ function App() {
             -getWallOffsetLimit(next, customWalls, door.wall),
             getWallOffsetLimit(next, customWalls, door.wall),
           ),
-          height: clamp(door.height, 1.9, next.height - 0.5),
+          height: clamp(door.height, 1.9, getWallTargetHeight(next, customWalls, door.wall) - 0.5),
         })),
       );
 
@@ -599,11 +640,12 @@ function App() {
       0,
       roomConfig.roomCount - 1,
     );
+    const dimensions = getRoomDimensions(roomConfig, roomIndex);
 
     return {
       roomIndex,
-      x: clamp(builderPlacement?.x ?? 0, -roomConfig.width / 2 + 1, roomConfig.width / 2 - 1),
-      z: clamp(builderPlacement?.z ?? 0, -roomConfig.depth / 2 + 1, roomConfig.depth / 2 - 1),
+      x: clamp(builderPlacement?.x ?? 0, -dimensions.width / 2 + 1, dimensions.width / 2 - 1),
+      z: clamp(builderPlacement?.z ?? 0, -dimensions.depth / 2 + 1, dimensions.depth / 2 - 1),
       wall: builderPlacement?.wall,
       wallOffset: builderPlacement?.wallOffset,
     };
@@ -643,10 +685,15 @@ function App() {
     }
 
     const nextRoomNumber = roomConfig.roomCount + 1;
-    setRoomConfig((current) => ({
-      ...current,
-      roomCount: Math.round(clamp(current.roomCount + 1, 1, 5)),
-    }));
+    setRoomConfig((current) => {
+      const template = getRoomDimensions(current, selectedRoomIndex);
+
+      return {
+        ...current,
+        roomCount: Math.round(clamp(current.roomCount + 1, 1, 5)),
+        rooms: [...getRoomList(current), { ...template }],
+      };
+    });
     selectRoom(roomConfig.roomCount);
     closeComponentMarket();
     setMessage(`已新增房间 ${nextRoomNumber}`);
@@ -709,6 +756,14 @@ function App() {
         .map((door) => ({
           ...door,
           roomIndex: door.roomIndex > roomIndex ? door.roomIndex - 1 : door.roomIndex,
+          connectsToRoomIndex:
+            door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined
+              ? door.connectsToRoomIndex
+              : door.connectsToRoomIndex === roomIndex
+                ? null
+                : door.connectsToRoomIndex > roomIndex
+                  ? door.connectsToRoomIndex - 1
+                  : door.connectsToRoomIndex,
           wall: parseBuiltWallTarget(door.wall)
             ? builtWallTarget(
                 Math.max(0, door.roomIndex > roomIndex ? door.roomIndex - 1 : door.roomIndex),
@@ -717,21 +772,33 @@ function App() {
             : door.wall,
         })),
     );
-    updateRoomConfig({ roomCount: roomConfig.roomCount - 1 });
+    setRoomConfig((current) => {
+      const rooms = getRoomList(current).filter((_, index) => index !== roomIndex);
+      const fallback = rooms[0] ?? getRoomDimensions(current, 0);
+
+      return {
+        width: fallback.width,
+        depth: fallback.depth,
+        height: fallback.height,
+        roomCount: Math.max(1, rooms.length),
+        rooms: rooms.length > 0 ? rooms : [fallback],
+      };
+    });
     selectRoom(Math.max(0, Math.min(roomIndex, roomConfig.roomCount - 2)));
     setMessage(`已删除房间 ${roomIndex + 1}`);
   }
 
   function addCustomWall() {
     const placement = getBuilderPlacement();
+    const dimensions = getRoomDimensions(roomConfig, placement.roomIndex);
     const wall: GalleryCustomWall = {
       id: `wall-${crypto.randomUUID()}`,
       name: `自定义墙 ${customWalls.length + 1}`,
       roomIndex: placement.roomIndex,
       x: placement.x,
       z: placement.z,
-      length: Math.min(7, roomConfig.width - 2),
-      height: Math.min(roomConfig.height - 0.3, 4.8),
+      length: Math.min(7, dimensions.width - 0.6),
+      height: Math.min(dimensions.height - 0.3, 4.8),
       rotation: 0,
     };
 
@@ -749,10 +816,26 @@ function App() {
               ...wall,
               ...patch,
               roomIndex: Math.round(clamp(patch.roomIndex ?? wall.roomIndex, 0, roomConfig.roomCount - 1)),
-              x: clamp(patch.x ?? wall.x, -roomConfig.width / 2 + 1, roomConfig.width / 2 - 1),
-              z: clamp(patch.z ?? wall.z, -roomConfig.depth / 2 + 1, roomConfig.depth / 2 - 1),
-              length: clamp(patch.length ?? wall.length, 2, roomConfig.width - 1),
-              height: clamp(patch.height ?? wall.height, 2.2, roomConfig.height - 0.35),
+              x: clamp(
+                patch.x ?? wall.x,
+                -getRoomDimensions(roomConfig, patch.roomIndex ?? wall.roomIndex).width / 2 + 1,
+                getRoomDimensions(roomConfig, patch.roomIndex ?? wall.roomIndex).width / 2 - 1,
+              ),
+              z: clamp(
+                patch.z ?? wall.z,
+                -getRoomDimensions(roomConfig, patch.roomIndex ?? wall.roomIndex).depth / 2 + 1,
+                getRoomDimensions(roomConfig, patch.roomIndex ?? wall.roomIndex).depth / 2 - 1,
+              ),
+              length: clamp(
+                patch.length ?? wall.length,
+                2,
+                getRoomDimensions(roomConfig, patch.roomIndex ?? wall.roomIndex).width - 0.6,
+              ),
+              height: clamp(
+                patch.height ?? wall.height,
+                2.2,
+                getRoomDimensions(roomConfig, patch.roomIndex ?? wall.roomIndex).height - 0.35,
+              ),
               rotation: patch.rotation ?? wall.rotation,
             }
           : wall,
@@ -784,6 +867,7 @@ function App() {
   function addDoor() {
     const placement = getBuilderPlacement();
     const wall = placement.wall ?? selectedWallId ?? builtWallTarget(placement.roomIndex, "north");
+    const wallHeight = getWallTargetHeight(roomConfig, customWalls, wall);
     const door: GalleryDoor = {
       id: `door-${crypto.randomUUID()}`,
       name: `门 ${doors.length + 1}`,
@@ -791,7 +875,9 @@ function App() {
       wall,
       offset: placement.wallOffset ?? 0,
       width: 1.55,
-      height: Math.min(2.35, roomConfig.height - 0.6),
+      height: Math.min(2.35, wallHeight - 0.6),
+      isOpen: false,
+      connectsToRoomIndex: roomConfig.roomCount > 1 ? (placement.roomIndex + 1) % roomConfig.roomCount : null,
     };
 
     setDoors((current) => [...current, door]);
@@ -810,6 +896,7 @@ function App() {
         const wall = patch.wall ?? door.wall;
         const roomIndex = getDoorRoomIndex(wall);
         const limit = getWallOffsetLimit(roomConfig, customWalls, wall);
+        const wallHeight = getWallTargetHeight(roomConfig, customWalls, wall);
 
         return {
           ...door,
@@ -818,9 +905,21 @@ function App() {
           roomIndex,
           offset: clamp(patch.offset ?? door.offset, -limit, limit),
           width: clamp(patch.width ?? door.width, 0.8, 3.2),
-          height: clamp(patch.height ?? door.height, 1.8, roomConfig.height - 0.4),
+          height: clamp(patch.height ?? door.height, 1.8, wallHeight - 0.4),
+          connectsToRoomIndex:
+            patch.connectsToRoomIndex === undefined
+              ? door.connectsToRoomIndex
+              : patch.connectsToRoomIndex === null
+                ? null
+                : Math.round(clamp(patch.connectsToRoomIndex, 0, roomConfig.roomCount - 1)),
         };
       }),
+    );
+  }
+
+  function toggleDoor(id: string) {
+    setDoors((current) =>
+      current.map((door) => (door.id === id ? { ...door, isOpen: !door.isOpen } : door)),
     );
   }
 
@@ -987,6 +1086,10 @@ function App() {
     : undefined;
   const selectedDoor = selectedDoorId ? doors.find((door) => door.id === selectedDoorId) : undefined;
   const selectedRoomLabel = `房间 ${selectedRoomIndex + 1}`;
+  const selectedRoomDimensions = getRoomDimensions(roomConfig, selectedRoomIndex);
+  const selectedWallRoomDimensions = selectedWall
+    ? getRoomDimensions(roomConfig, selectedWall.roomIndex)
+    : selectedRoomDimensions;
   const builderPlacementSummary = builderPlacement
     ? builderPlacement.wall
       ? `${builderPlacement.label ?? "墙面"} · 偏移 ${(builderPlacement.wallOffset ?? 0).toFixed(1)}`
@@ -1164,6 +1267,7 @@ function App() {
           onUpdateImageLayout={updateImageLayout}
           onUpdateCustomWall={updateCustomWall}
           onUpdateDoor={updateDoor}
+          onToggleDoor={toggleDoor}
           onPlaceImageOnWall={placePendingImage}
           onAimTargetChange={setAimTargetLabel}
           onBuilderPlacementChange={setBuilderPlacement}
@@ -1504,41 +1608,41 @@ function App() {
                 {transformTool === "scale" ? (
                   <>
                     <label className="field">
-                      <span>宽度 {roomConfig.width.toFixed(1)}</span>
+                      <span>宽度 {selectedRoomDimensions.width.toFixed(1)}</span>
                       <input
                         type="range"
-                        min="12"
-                        max="36"
+                        min="4"
+                        max="40"
                         step="0.5"
-                        value={roomConfig.width}
+                        value={selectedRoomDimensions.width}
                         onChange={(event) => updateRoomConfig({ width: Number(event.target.value) })}
                       />
                     </label>
                     <label className="field">
-                      <span>深度 {roomConfig.depth.toFixed(1)}</span>
+                      <span>深度 {selectedRoomDimensions.depth.toFixed(1)}</span>
                       <input
                         type="range"
-                        min="14"
-                        max="44"
+                        min="6"
+                        max="48"
                         step="0.5"
-                        value={roomConfig.depth}
+                        value={selectedRoomDimensions.depth}
                         onChange={(event) => updateRoomConfig({ depth: Number(event.target.value) })}
                       />
                     </label>
                     <label className="field">
-                      <span>层高 {roomConfig.height.toFixed(1)}</span>
+                      <span>层高 {selectedRoomDimensions.height.toFixed(1)}</span>
                       <input
                         type="range"
-                        min="4.2"
-                        max="8"
+                        min="3.2"
+                        max="9"
                         step="0.1"
-                        value={roomConfig.height}
+                        value={selectedRoomDimensions.height}
                         onChange={(event) => updateRoomConfig({ height: Number(event.target.value) })}
                       />
                     </label>
                   </>
                 ) : (
-                  <p className="empty-inspector">房间位置由连续展厅结构自动排列，切到“缩放”调整空间尺寸。</p>
+                  <p className="empty-inspector">房间位置由连续展厅结构自动排列，切到“缩放”可把当前房间做成展厅或走廊。</p>
                 )}
 
                 <button
@@ -1579,8 +1683,8 @@ function App() {
                       <span>X {selectedWall.x.toFixed(1)}</span>
                       <input
                         type="range"
-                        min={-roomConfig.width / 2 + 1}
-                        max={roomConfig.width / 2 - 1}
+                        min={-selectedWallRoomDimensions.width / 2 + 1}
+                        max={selectedWallRoomDimensions.width / 2 - 1}
                         step="0.1"
                         value={selectedWall.x}
                         onChange={(event) =>
@@ -1592,8 +1696,8 @@ function App() {
                       <span>Z {selectedWall.z.toFixed(1)}</span>
                       <input
                         type="range"
-                        min={-roomConfig.depth / 2 + 1}
-                        max={roomConfig.depth / 2 - 1}
+                        min={-selectedWallRoomDimensions.depth / 2 + 1}
+                        max={selectedWallRoomDimensions.depth / 2 - 1}
                         step="0.1"
                         value={selectedWall.z}
                         onChange={(event) =>
@@ -1627,7 +1731,7 @@ function App() {
                       <input
                         type="range"
                         min="2"
-                        max={roomConfig.width - 1}
+                        max={selectedWallRoomDimensions.width - 0.6}
                         step="0.1"
                         value={selectedWall.length}
                         onChange={(event) =>
@@ -1640,7 +1744,7 @@ function App() {
                       <input
                         type="range"
                         min="2.2"
-                        max={roomConfig.height - 0.35}
+                        max={selectedWallRoomDimensions.height - 0.35}
                         step="0.1"
                         value={selectedWall.height}
                         onChange={(event) =>
@@ -1666,8 +1770,17 @@ function App() {
               <div className="inspector-fields">
                 <div className="object-title">
                   <strong>{selectedDoor.name}</strong>
-                  <span>门</span>
+                  <span>{selectedDoor.isOpen ? "已打开" : "已关闭"}</span>
                 </div>
+
+                <button
+                  type="button"
+                  className="tool-button secondary"
+                  onClick={() => toggleDoor(selectedDoor.id)}
+                >
+                  <DoorOpen size={17} />
+                  <span>{selectedDoor.isOpen ? "关闭门" : "打开门"}</span>
+                </button>
 
                 {(transformTool === "move" || transformTool === "rotate") ? (
                   <label className="field">
@@ -1688,19 +1801,40 @@ function App() {
                 ) : null}
 
                 {transformTool === "move" ? (
-                  <label className="field">
-                    <span>位置 {selectedDoor.offset.toFixed(1)}</span>
-                    <input
-                      type="range"
-                      min={-getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
-                      max={getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
-                      step="0.1"
-                      value={selectedDoor.offset}
-                      onChange={(event) =>
-                        updateDoor(selectedDoor.id, { offset: Number(event.target.value) })
-                      }
-                    />
-                  </label>
+                  <>
+                    <label className="field">
+                      <span>位置 {selectedDoor.offset.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min={-getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
+                        max={getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
+                        step="0.1"
+                        value={selectedDoor.offset}
+                        onChange={(event) =>
+                          updateDoor(selectedDoor.id, { offset: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>连接到</span>
+                      <select
+                        value={selectedDoor.connectsToRoomIndex ?? ""}
+                        onChange={(event) =>
+                          updateDoor(selectedDoor.id, {
+                            connectsToRoomIndex:
+                              event.target.value === "" ? null : Number(event.target.value),
+                          })
+                        }
+                      >
+                        <option value="">未指定</option>
+                        {Array.from({ length: roomConfig.roomCount }, (_, roomIndex) => (
+                          <option key={roomIndex} value={roomIndex}>
+                            房间 {roomIndex + 1}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </>
                 ) : null}
 
                 {transformTool === "scale" ? (
@@ -1723,7 +1857,7 @@ function App() {
                       <input
                         type="range"
                         min="1.8"
-                        max={roomConfig.height - 0.4}
+                        max={getWallTargetHeight(roomConfig, customWalls, selectedDoor.wall) - 0.4}
                         step="0.1"
                         value={selectedDoor.height}
                         onChange={(event) =>
