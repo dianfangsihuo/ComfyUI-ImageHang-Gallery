@@ -40,6 +40,7 @@ import {
 import { createSampleImages } from "./lib/sampleArt";
 import type {
   AppMode,
+  EditorTransformTool,
   EditorViewMode,
   GalleryCustomWall,
   GalleryDoor,
@@ -50,6 +51,12 @@ import type {
   GalleryWall,
   GalleryWallTarget,
 } from "./types";
+
+type EditableSelection =
+  | { type: "artwork"; id: string }
+  | { type: "wall"; id: string }
+  | { type: "door"; id: string }
+  | { type: "room"; roomIndex: number };
 
 const wallLabels: Record<GalleryWall, string> = {
   north: "前墙",
@@ -171,6 +178,8 @@ function App() {
   const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
   const [selectedDoorId, setSelectedDoorId] = useState<string | null>(null);
   const [selectedRoomIndex, setSelectedRoomIndex] = useState(0);
+  const [selectedObject, setSelectedObject] = useState<EditableSelection | null>(null);
+  const [transformTool, setTransformTool] = useState<EditorTransformTool>("move");
   const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
   const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("topdown");
@@ -186,7 +195,7 @@ function App() {
     (image) => !pendingPlacementIds.includes(image.id) || layouts[image.id],
   );
   const selectedIndex = sceneImages.findIndex((image) => image.id === selectedImageId);
-  const selectedImage = selectedIndex >= 0 ? sceneImages[selectedIndex] : sceneImages[0];
+  const selectedImage = selectedIndex >= 0 ? sceneImages[selectedIndex] : undefined;
   const selectedLayout =
     selectedImage &&
     (layouts[selectedImage.id] ??
@@ -205,7 +214,37 @@ function App() {
       setSelectedImageId(null);
       setSelectedWallId(null);
       setSelectedDoorId(null);
+      setSelectedObject(null);
     }
+  }
+
+  function selectArtwork(id: string) {
+    setSelectedObject({ type: "artwork", id });
+    setSelectedImageId(id);
+    setSelectedWallId(null);
+    setSelectedDoorId(null);
+  }
+
+  function selectWall(id: string) {
+    setSelectedObject({ type: "wall", id });
+    setSelectedWallId(id);
+    setSelectedImageId(null);
+    setSelectedDoorId(null);
+  }
+
+  function selectDoor(id: string) {
+    setSelectedObject({ type: "door", id });
+    setSelectedDoorId(id);
+    setSelectedImageId(null);
+    setSelectedWallId(null);
+  }
+
+  function selectRoom(roomIndex: number) {
+    setSelectedObject({ type: "room", roomIndex });
+    setSelectedRoomIndex(roomIndex);
+    setSelectedImageId(null);
+    setSelectedWallId(null);
+    setSelectedDoorId(null);
   }
 
   useEffect(() => {
@@ -260,14 +299,11 @@ function App() {
   }, [roomConfig.roomCount]);
 
   useEffect(() => {
-    if (mode !== "edit") {
-      return;
+    if (selectedObject?.type === "artwork" && !sceneImages.some((image) => image.id === selectedObject.id)) {
+      setSelectedObject(null);
+      setSelectedImageId(null);
     }
-
-    if (!selectedImageId || !sceneImages.some((image) => image.id === selectedImageId)) {
-      setSelectedImageId(sceneImages[0]?.id ?? null);
-    }
-  }, [mode, sceneImages, selectedImageId]);
+  }, [sceneImages, selectedObject]);
 
   useEffect(
     () => () => {
@@ -293,7 +329,9 @@ function App() {
       const results = await Promise.all(fileArray.map(createGalleryImage));
       const uploadedImages = results.map((result) => result.image);
       setImages((current) => [...uploadedImages, ...current]);
-      setSelectedImageId(uploadedImages[0]?.id ?? null);
+      if (uploadedImages[0]) {
+        selectArtwork(uploadedImages[0].id);
+      }
       const warning = results.find((result) => result.warning)?.warning;
 
       if (mode === "edit") {
@@ -346,6 +384,7 @@ function App() {
     setSelectedWallId(null);
     setSelectedDoorId(null);
     setSelectedRoomIndex(0);
+    setSelectedObject(null);
     setMessage("已恢复示例画廊");
   }
 
@@ -441,9 +480,7 @@ function App() {
 
   function addRoom() {
     updateRoomConfig({ roomCount: roomConfig.roomCount + 1 });
-    setSelectedRoomIndex(roomConfig.roomCount);
-    setSelectedWallId(null);
-    setSelectedDoorId(null);
+    selectRoom(roomConfig.roomCount);
     setMessage(`已新增房间 ${roomConfig.roomCount + 1}`);
   }
 
@@ -513,9 +550,7 @@ function App() {
         })),
     );
     updateRoomConfig({ roomCount: roomConfig.roomCount - 1 });
-    setSelectedRoomIndex(Math.max(0, Math.min(roomIndex, roomConfig.roomCount - 2)));
-    setSelectedWallId(null);
-    setSelectedDoorId(null);
+    selectRoom(Math.max(0, Math.min(roomIndex, roomConfig.roomCount - 2)));
     setMessage(`已删除房间 ${roomIndex + 1}`);
   }
 
@@ -533,8 +568,7 @@ function App() {
     };
 
     setCustomWalls((current) => [...current, wall]);
-    setSelectedWallId(wall.id);
-    setSelectedDoorId(null);
+    selectWall(wall.id);
     setMessage(`已新增 ${wall.name}`);
   }
 
@@ -563,6 +597,7 @@ function App() {
     setLayouts((current) =>
       Object.fromEntries(Object.entries(current).filter(([, layout]) => layout.wall !== id)),
     );
+    setSelectedObject(null);
     setSelectedWallId(null);
     setMessage("已删除自定义墙壁");
   }
@@ -590,8 +625,7 @@ function App() {
     };
 
     setDoors((current) => [...current, door]);
-    setSelectedDoorId(door.id);
-    setSelectedWallId(null);
+    selectDoor(door.id);
     setMessage(`已新增 ${door.name}`);
   }
 
@@ -621,6 +655,7 @@ function App() {
 
   function deleteDoor(id: string) {
     setDoors((current) => current.filter((door) => door.id !== id));
+    setSelectedObject(null);
     setSelectedDoorId(null);
     setMessage("已删除门");
   }
@@ -647,13 +682,16 @@ function App() {
       },
     }));
     setPendingPlacementIds((current) => current.slice(1));
-    setSelectedImageId(imageId);
+    selectArtwork(imageId);
     setMessage(pendingPlacementIds.length > 1 ? "已放置图片，请继续点击墙面" : "图片已挂到墙面");
   }
 
   const wallOptions = getWallOptions();
-  const selectedWall = customWalls.find((wall) => wall.id === selectedWallId) ?? customWalls[0];
-  const selectedDoor = doors.find((door) => door.id === selectedDoorId) ?? doors[0];
+  const selectedWall = selectedWallId
+    ? customWalls.find((wall) => wall.id === selectedWallId)
+    : undefined;
+  const selectedDoor = selectedDoorId ? doors.find((door) => door.id === selectedDoorId) : undefined;
+  const selectedRoomLabel = `房间 ${selectedRoomIndex + 1}`;
 
   return (
     <main className={`app-shell ${mode}-shell`}>
@@ -666,25 +704,16 @@ function App() {
           doors={doors}
           mode={mode}
           editorViewMode={editorViewMode}
+          transformTool={transformTool}
           pendingPlacementImageId={pendingPlacementIds[0] ?? null}
           selectedImageId={selectedImageId}
           selectedWallId={selectedWallId}
           selectedDoorId={selectedDoorId}
           selectedRoomIndex={selectedRoomIndex}
-          onSelectImage={setSelectedImageId}
-          onSelectWall={(id) => {
-            setSelectedWallId(id);
-            setSelectedDoorId(null);
-          }}
-          onSelectDoor={(id) => {
-            setSelectedDoorId(id);
-            setSelectedWallId(null);
-          }}
-          onSelectRoom={(roomIndex) => {
-            setSelectedRoomIndex(roomIndex);
-            setSelectedWallId(null);
-            setSelectedDoorId(null);
-          }}
+          onSelectImage={selectArtwork}
+          onSelectWall={selectWall}
+          onSelectDoor={selectDoor}
+          onSelectRoom={selectRoom}
           onUpdateCustomWall={updateCustomWall}
           onPlaceImageOnWall={placePendingImage}
         />
@@ -841,88 +870,386 @@ function App() {
           </section>
         ) : null}
 
-        {mode === "edit" && selectedImage && selectedLayout ? (
-          <section className="editor-panel" aria-label="Frame editor">
+        {mode === "edit" ? (
+          <section className="editor-panel object-inspector" aria-label="Object inspector">
             <div className="editor-heading">
               <Move size={17} />
-              <span>{selectedImage.name}</span>
+              <span>对象编辑器</span>
             </div>
 
-            <label className="field">
-              <span>墙面</span>
-              <select
-                value={selectedLayout.wall}
-                onChange={(event) =>
-                  updateSelectedLayout({ wall: event.target.value as GalleryWallTarget })
-                }
+            <div className="transform-tools" aria-label="Transform tools">
+              <button
+                type="button"
+                className={transformTool === "move" ? "active" : ""}
+                onClick={() => setTransformTool("move")}
               >
-                {wallOptions.map(([wall, label]) => (
-                  <option key={wall} value={wall}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <Move size={15} />
+                <span>移动</span>
+              </button>
+              <button
+                type="button"
+                className={transformTool === "rotate" ? "active" : ""}
+                onClick={() => setTransformTool("rotate")}
+              >
+                <RotateCcw size={15} />
+                <span>旋转</span>
+              </button>
+              <button
+                type="button"
+                className={transformTool === "scale" ? "active" : ""}
+                onClick={() => setTransformTool("scale")}
+              >
+                <Maximize2 size={15} />
+                <span>缩放</span>
+              </button>
+            </div>
 
-            <label className="field">
-              <span>横向位置 {selectedLayout.offset.toFixed(1)}</span>
-              <input
-                type="range"
-                min={-getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
-                max={getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
-                step="0.1"
-                value={selectedLayout.offset}
-                onChange={(event) =>
-                  updateSelectedLayout({ offset: Number(event.target.value) })
-                }
-              />
-            </label>
+            {!selectedObject ? (
+              <p className="empty-inspector">点击画作、墙壁、门或房间开始编辑。</p>
+            ) : null}
 
-            <label className="field">
-              <span>高度 {selectedLayout.height.toFixed(1)}</span>
-              <input
-                type="range"
-                min="1.1"
-                max={Math.max(
-                  1.2,
-                  getWallTargetHeight(roomConfig, customWalls, selectedLayout.wall) - 1.15,
+            {selectedObject?.type === "artwork" && selectedImage && selectedLayout ? (
+              <div className="inspector-fields">
+                <div className="object-title">
+                  <strong>{selectedImage.name}</strong>
+                  <span>画作</span>
+                </div>
+
+                {(transformTool === "move" || transformTool === "rotate") ? (
+                  <label className="field">
+                    <span>{transformTool === "rotate" ? "朝向墙面" : "墙面"}</span>
+                    <select
+                      value={selectedLayout.wall}
+                      onChange={(event) =>
+                        updateSelectedLayout({ wall: event.target.value as GalleryWallTarget })
+                      }
+                    >
+                      {wallOptions.map(([wall, label]) => (
+                        <option key={wall} value={wall}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {transformTool === "move" ? (
+                  <>
+                    <label className="field">
+                      <span>横向位置 {selectedLayout.offset.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min={-getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
+                        max={getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
+                        step="0.1"
+                        value={selectedLayout.offset}
+                        onChange={(event) =>
+                          updateSelectedLayout({ offset: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>高度 {selectedLayout.height.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="1.1"
+                        max={Math.max(
+                          1.2,
+                          getWallTargetHeight(roomConfig, customWalls, selectedLayout.wall) - 1.15,
+                        )}
+                        step="0.1"
+                        value={selectedLayout.height}
+                        onChange={(event) =>
+                          updateSelectedLayout({ height: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                  </>
+                ) : null}
+
+                {transformTool === "scale" ? (
+                  <label className="field">
+                    <span>大小 {selectedLayout.width.toFixed(1)}</span>
+                    <input
+                      type="range"
+                      min="1.2"
+                      max="5"
+                      step="0.1"
+                      value={selectedLayout.width}
+                      onChange={(event) =>
+                        updateSelectedLayout({ width: Number(event.target.value) })
+                      }
+                    />
+                  </label>
+                ) : null}
+
+                <button
+                  type="button"
+                  className="tool-button secondary"
+                  onClick={() =>
+                    setLayouts((current) => {
+                      const next = { ...current };
+                      delete next[selectedImage.id];
+                      return next;
+                    })
+                  }
+                >
+                  <Maximize2 size={17} />
+                  <span>重置画作变换</span>
+                </button>
+              </div>
+            ) : null}
+
+            {selectedObject?.type === "room" ? (
+              <div className="inspector-fields">
+                <div className="object-title">
+                  <strong>{selectedRoomLabel}</strong>
+                  <span>房间</span>
+                </div>
+
+                {transformTool === "scale" ? (
+                  <>
+                    <label className="field">
+                      <span>宽度 {roomConfig.width.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="12"
+                        max="36"
+                        step="0.5"
+                        value={roomConfig.width}
+                        onChange={(event) => updateRoomConfig({ width: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>深度 {roomConfig.depth.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="14"
+                        max="44"
+                        step="0.5"
+                        value={roomConfig.depth}
+                        onChange={(event) => updateRoomConfig({ depth: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>层高 {roomConfig.height.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="4.2"
+                        max="8"
+                        step="0.1"
+                        value={roomConfig.height}
+                        onChange={(event) => updateRoomConfig({ height: Number(event.target.value) })}
+                      />
+                    </label>
+                  </>
+                ) : (
+                  <p className="empty-inspector">房间位置由连续展厅结构自动排列，切到“缩放”调整空间尺寸。</p>
                 )}
-                step="0.1"
-                value={selectedLayout.height}
-                onChange={(event) =>
-                  updateSelectedLayout({ height: Number(event.target.value) })
-                }
-              />
-            </label>
 
-            <label className="field">
-              <span>大小 {selectedLayout.width.toFixed(1)}</span>
-              <input
-                type="range"
-                min="1.2"
-                max="5"
-                step="0.1"
-                value={selectedLayout.width}
-                onChange={(event) =>
-                  updateSelectedLayout({ width: Number(event.target.value) })
-                }
-              />
-            </label>
+                <button
+                  type="button"
+                  className="tool-button secondary danger"
+                  onClick={() => deleteRoom(selectedRoomIndex)}
+                  disabled={roomConfig.roomCount <= 1}
+                >
+                  <Trash2 size={17} />
+                  <span>删除当前房间</span>
+                </button>
+              </div>
+            ) : null}
 
-            <button
-              type="button"
-              className="tool-button secondary"
-              onClick={() =>
-                setLayouts((current) => {
-                  const next = { ...current };
-                  delete next[selectedImage.id];
-                  return next;
-                })
-              }
-            >
-              <Maximize2 size={17} />
-              <span>重置画框</span>
-            </button>
+            {selectedObject?.type === "wall" && selectedWall ? (
+              <div className="inspector-fields">
+                <div className="object-title">
+                  <strong>{selectedWall.name}</strong>
+                  <span>墙壁</span>
+                </div>
+
+                {transformTool === "move" ? (
+                  <>
+                    <label className="field">
+                      <span>所属房间 {selectedWall.roomIndex + 1}</span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={roomConfig.roomCount - 1}
+                        step="1"
+                        value={selectedWall.roomIndex}
+                        onChange={(event) =>
+                          updateCustomWall(selectedWall.id, { roomIndex: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>X {selectedWall.x.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min={-roomConfig.width / 2 + 1}
+                        max={roomConfig.width / 2 - 1}
+                        step="0.1"
+                        value={selectedWall.x}
+                        onChange={(event) =>
+                          updateCustomWall(selectedWall.id, { x: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Z {selectedWall.z.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min={-roomConfig.depth / 2 + 1}
+                        max={roomConfig.depth / 2 - 1}
+                        step="0.1"
+                        value={selectedWall.z}
+                        onChange={(event) =>
+                          updateCustomWall(selectedWall.id, { z: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                  </>
+                ) : null}
+
+                {transformTool === "rotate" ? (
+                  <label className="field">
+                    <span>旋转 {Math.round((selectedWall.rotation * 180) / Math.PI)}°</span>
+                    <input
+                      type="range"
+                      min="-3.14"
+                      max="3.14"
+                      step="0.05"
+                      value={selectedWall.rotation}
+                      onChange={(event) =>
+                        updateCustomWall(selectedWall.id, { rotation: Number(event.target.value) })
+                      }
+                    />
+                  </label>
+                ) : null}
+
+                {transformTool === "scale" ? (
+                  <>
+                    <label className="field">
+                      <span>长度 {selectedWall.length.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="2"
+                        max={roomConfig.width - 1}
+                        step="0.1"
+                        value={selectedWall.length}
+                        onChange={(event) =>
+                          updateCustomWall(selectedWall.id, { length: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>高度 {selectedWall.height.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="2.2"
+                        max={roomConfig.height - 0.35}
+                        step="0.1"
+                        value={selectedWall.height}
+                        onChange={(event) =>
+                          updateCustomWall(selectedWall.id, { height: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                  </>
+                ) : null}
+
+                <button
+                  type="button"
+                  className="tool-button secondary danger"
+                  onClick={() => deleteCustomWall(selectedWall.id)}
+                >
+                  <Trash2 size={17} />
+                  <span>删除选中墙壁</span>
+                </button>
+              </div>
+            ) : null}
+
+            {selectedObject?.type === "door" && selectedDoor ? (
+              <div className="inspector-fields">
+                <div className="object-title">
+                  <strong>{selectedDoor.name}</strong>
+                  <span>门</span>
+                </div>
+
+                {(transformTool === "move" || transformTool === "rotate") ? (
+                  <label className="field">
+                    <span>{transformTool === "rotate" ? "朝向墙面" : "所在墙面"}</span>
+                    <select
+                      value={selectedDoor.wall}
+                      onChange={(event) =>
+                        updateDoor(selectedDoor.id, { wall: event.target.value as GalleryWallTarget })
+                      }
+                    >
+                      {wallOptions.map(([wall, label]) => (
+                        <option key={wall} value={wall}>
+                          {label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
+
+                {transformTool === "move" ? (
+                  <label className="field">
+                    <span>位置 {selectedDoor.offset.toFixed(1)}</span>
+                    <input
+                      type="range"
+                      min={-getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
+                      max={getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
+                      step="0.1"
+                      value={selectedDoor.offset}
+                      onChange={(event) =>
+                        updateDoor(selectedDoor.id, { offset: Number(event.target.value) })
+                      }
+                    />
+                  </label>
+                ) : null}
+
+                {transformTool === "scale" ? (
+                  <>
+                    <label className="field">
+                      <span>宽度 {selectedDoor.width.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="0.8"
+                        max="3.2"
+                        step="0.1"
+                        value={selectedDoor.width}
+                        onChange={(event) =>
+                          updateDoor(selectedDoor.id, { width: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>高度 {selectedDoor.height.toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="1.8"
+                        max={roomConfig.height - 0.4}
+                        step="0.1"
+                        value={selectedDoor.height}
+                        onChange={(event) =>
+                          updateDoor(selectedDoor.id, { height: Number(event.target.value) })
+                        }
+                      />
+                    </label>
+                  </>
+                ) : null}
+
+                <button
+                  type="button"
+                  className="tool-button secondary danger"
+                  onClick={() => deleteDoor(selectedDoor.id)}
+                >
+                  <Trash2 size={17} />
+                  <span>删除选中门</span>
+                </button>
+              </div>
+            ) : null}
           </section>
         ) : null}
 
@@ -939,33 +1266,13 @@ function App() {
               <small>剩余 {remainingCapacity} 张</small>
             </div>
 
-            <div className="button-row">
-              <button type="button" className="tool-button secondary" onClick={addRoom}>
-                <Plus size={17} />
-                <span>新增房间</span>
-              </button>
-              <button
-                type="button"
-                className="tool-button secondary danger"
-                onClick={() => deleteRoom(selectedRoomIndex)}
-                disabled={roomConfig.roomCount <= 1}
-              >
-                <Trash2 size={17} />
-                <span>删除房间</span>
-              </button>
-            </div>
-
             <div className="room-selector" aria-label="Room selector">
               {Array.from({ length: roomConfig.roomCount }, (_, roomIndex) => (
                 <button
                   key={roomIndex}
                   type="button"
                   className={selectedRoomIndex === roomIndex ? "active" : ""}
-                  onClick={() => {
-                    setSelectedRoomIndex(roomIndex);
-                    setSelectedWallId(null);
-                    setSelectedDoorId(null);
-                  }}
+                  onClick={() => selectRoom(roomIndex)}
                 >
                   房间 {roomIndex + 1}
                 </button>
@@ -1003,231 +1310,6 @@ function App() {
               <p className="placement-note">待放置 {pendingPlacementIds.length} 张：点击任意墙面挂画</p>
             ) : null}
 
-            <label className="field">
-              <span>宽度 {roomConfig.width.toFixed(1)}</span>
-              <input
-                type="range"
-                min="12"
-                max="36"
-                step="0.5"
-                value={roomConfig.width}
-                onChange={(event) => updateRoomConfig({ width: Number(event.target.value) })}
-              />
-            </label>
-
-            <label className="field">
-              <span>深度 {roomConfig.depth.toFixed(1)}</span>
-              <input
-                type="range"
-                min="14"
-                max="44"
-                step="0.5"
-                value={roomConfig.depth}
-                onChange={(event) => updateRoomConfig({ depth: Number(event.target.value) })}
-              />
-            </label>
-
-            <label className="field">
-              <span>房间数 {roomConfig.roomCount}</span>
-              <input
-                type="range"
-                min="1"
-                max="5"
-                step="1"
-                value={roomConfig.roomCount}
-                onChange={(event) => updateRoomConfig({ roomCount: Number(event.target.value) })}
-              />
-            </label>
-
-            <label className="field">
-              <span>层高 {roomConfig.height.toFixed(1)}</span>
-              <input
-                type="range"
-                min="4.2"
-                max="8"
-                step="0.1"
-                value={roomConfig.height}
-                onChange={(event) => updateRoomConfig({ height: Number(event.target.value) })}
-              />
-            </label>
-          </section>
-        ) : null}
-
-        {mode === "edit" && customWalls.length > 0 && selectedWall ? (
-          <section className="editor-panel" aria-label="Wall editor">
-            <div className="editor-heading">
-              <Ruler size={17} />
-              <span>{selectedWall.name}</span>
-            </div>
-
-            <label className="field">
-              <span>墙壁</span>
-              <select
-                value={selectedWall.id}
-                onChange={(event) => setSelectedWallId(event.target.value)}
-              >
-                {customWalls.map((wall) => (
-                  <option key={wall.id} value={wall.id}>
-                    {wall.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span>所属房间 {selectedWall.roomIndex + 1}</span>
-              <input
-                type="range"
-                min="0"
-                max={roomConfig.roomCount - 1}
-                step="1"
-                value={selectedWall.roomIndex}
-                onChange={(event) =>
-                  updateCustomWall(selectedWall.id, { roomIndex: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <label className="field">
-              <span>X {selectedWall.x.toFixed(1)}</span>
-              <input
-                type="range"
-                min={-roomConfig.width / 2 + 1}
-                max={roomConfig.width / 2 - 1}
-                step="0.1"
-                value={selectedWall.x}
-                onChange={(event) =>
-                  updateCustomWall(selectedWall.id, { x: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <label className="field">
-              <span>Z {selectedWall.z.toFixed(1)}</span>
-              <input
-                type="range"
-                min={-roomConfig.depth / 2 + 1}
-                max={roomConfig.depth / 2 - 1}
-                step="0.1"
-                value={selectedWall.z}
-                onChange={(event) =>
-                  updateCustomWall(selectedWall.id, { z: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <label className="field">
-              <span>长度 {selectedWall.length.toFixed(1)}</span>
-              <input
-                type="range"
-                min="2"
-                max={roomConfig.width - 1}
-                step="0.1"
-                value={selectedWall.length}
-                onChange={(event) =>
-                  updateCustomWall(selectedWall.id, { length: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <label className="field">
-              <span>旋转 {Math.round((selectedWall.rotation * 180) / Math.PI)}°</span>
-              <input
-                type="range"
-                min="-3.14"
-                max="3.14"
-                step="0.05"
-                value={selectedWall.rotation}
-                onChange={(event) =>
-                  updateCustomWall(selectedWall.id, { rotation: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <button
-              type="button"
-              className="tool-button secondary danger"
-              onClick={() => deleteCustomWall(selectedWall.id)}
-            >
-              <Trash2 size={17} />
-              <span>删除墙壁</span>
-            </button>
-          </section>
-        ) : null}
-
-        {mode === "edit" && doors.length > 0 && selectedDoor ? (
-          <section className="editor-panel" aria-label="Door editor">
-            <div className="editor-heading">
-              <DoorOpen size={17} />
-              <span>{selectedDoor.name}</span>
-            </div>
-
-            <label className="field">
-              <span>门所在墙面</span>
-              <select
-                value={selectedDoor.wall}
-                onChange={(event) =>
-                  updateDoor(selectedDoor.id, { wall: event.target.value as GalleryWallTarget })
-                }
-              >
-                {wallOptions.map(([wall, label]) => (
-                  <option key={wall} value={wall}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="field">
-              <span>位置 {selectedDoor.offset.toFixed(1)}</span>
-              <input
-                type="range"
-                min={-getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
-                max={getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
-                step="0.1"
-                value={selectedDoor.offset}
-                onChange={(event) =>
-                  updateDoor(selectedDoor.id, { offset: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <label className="field">
-              <span>宽度 {selectedDoor.width.toFixed(1)}</span>
-              <input
-                type="range"
-                min="0.8"
-                max="3.2"
-                step="0.1"
-                value={selectedDoor.width}
-                onChange={(event) =>
-                  updateDoor(selectedDoor.id, { width: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <label className="field">
-              <span>高度 {selectedDoor.height.toFixed(1)}</span>
-              <input
-                type="range"
-                min="1.8"
-                max={roomConfig.height - 0.4}
-                step="0.1"
-                value={selectedDoor.height}
-                onChange={(event) =>
-                  updateDoor(selectedDoor.id, { height: Number(event.target.value) })
-                }
-              />
-            </label>
-
-            <button
-              type="button"
-              className="tool-button secondary danger"
-              onClick={() => deleteDoor(selectedDoor.id)}
-            >
-              <Trash2 size={17} />
-              <span>删除门</span>
-            </button>
           </section>
         ) : null}
 
@@ -1242,7 +1324,7 @@ function App() {
               <article
                 className={`image-item muted ${selectedImageId === image.id ? "selected" : ""}`}
                 key={image.id}
-                onClick={() => setSelectedImageId(image.id)}
+                onClick={() => selectArtwork(image.id)}
               >
                 <img src={image.url} alt="" />
                 <div>
@@ -1256,7 +1338,7 @@ function App() {
               <article
                 className={`image-item ${selectedImageId === image.id ? "selected" : ""}`}
                 key={image.id}
-                onClick={() => setSelectedImageId(image.id)}
+                onClick={() => selectArtwork(image.id)}
               >
                 <img src={image.url} alt="" />
                 <div>

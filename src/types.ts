@@ -1,6 +1,7 @@
 export type GalleryImageSource = "local" | "supabase" | "sample";
 export type AppMode = "view" | "edit";
 export type EditorViewMode = "topdown" | "firstPerson";
+export type EditorTransformTool = "move" | "rotate" | "scale";
 export type GalleryWall = "north" | "south" | "west" | "east";
 export type GalleryWallTarget = GalleryWall | string;
 

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type {
   AppMode,
+  EditorTransformTool,
   EditorViewMode,
   GalleryCustomWall,
   GalleryDoor,
@@ -22,6 +23,7 @@ interface GallerySceneProps {
   doors: GalleryDoor[];
   mode: AppMode;
   editorViewMode: EditorViewMode;
+  transformTool: EditorTransformTool;
   pendingPlacementImageId: string | null;
   selectedImageId: string | null;
   selectedWallId: string | null;
@@ -594,6 +596,153 @@ function Room({
   );
 }
 
+function SelectedWallDragSurface({
+  wall,
+  room,
+  onUpdateCustomWall,
+}: {
+  wall: GalleryCustomWall;
+  room: GalleryRoomConfig;
+  onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
+}) {
+  const isDragging = useRef(false);
+  const centerX = roomOffset(room, room.roomCount - 1) / 2;
+  const totalWidth = roomOffset(room, room.roomCount - 1) + room.width + 4;
+
+  function moveWall(event: ThreeEvent<PointerEvent>) {
+    const roomX = roomOffset(room, wall.roomIndex);
+
+    onUpdateCustomWall(wall.id, {
+      x: event.point.x - roomX,
+      z: event.point.z,
+    });
+  }
+
+  function startDrag(event: ThreeEvent<PointerEvent>) {
+    event.stopPropagation();
+    isDragging.current = true;
+    const target = event.target as HTMLElement;
+    target.setPointerCapture?.(event.pointerId);
+    moveWall(event);
+  }
+
+  function drag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current) {
+      return;
+    }
+
+    event.stopPropagation();
+    moveWall(event);
+  }
+
+  function stopDrag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    target.releasePointerCapture?.(event.pointerId);
+    isDragging.current = false;
+  }
+
+  return (
+    <mesh
+      position={[centerX, 0.14, 0]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      onPointerDown={startDrag}
+      onPointerMove={drag}
+      onPointerUp={stopDrag}
+      onPointerCancel={stopDrag}
+    >
+      <planeGeometry args={[totalWidth, room.depth + 4]} />
+      <meshBasicMaterial transparent opacity={0.01} depthWrite={false} />
+    </mesh>
+  );
+}
+
+function SelectedWallDomDrag({
+  wall,
+  room,
+  onUpdateCustomWall,
+}: {
+  wall: GalleryCustomWall;
+  room: GalleryRoomConfig;
+  onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
+}) {
+  const { camera, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const pointer = useMemo(() => new THREE.Vector2(), []);
+  const floorPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const hitPoint = useMemo(() => new THREE.Vector3(), []);
+  const isDragging = useRef(false);
+  const wallRef = useRef(wall);
+
+  useEffect(() => {
+    wallRef.current = wall;
+  }, [wall]);
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+
+    function updateFromEvent(event: PointerEvent) {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+
+      if (!raycaster.ray.intersectPlane(floorPlane, hitPoint)) {
+        return;
+      }
+
+      const currentWall = wallRef.current;
+      const roomX = roomOffset(room, currentWall.roomIndex);
+
+      onUpdateCustomWall(currentWall.id, {
+        x: hitPoint.x - roomX,
+        z: hitPoint.z,
+      });
+    }
+
+    function startDrag(event: PointerEvent) {
+      if (event.button !== 0 || event.target !== canvas) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      isDragging.current = true;
+      updateFromEvent(event);
+    }
+
+    function drag(event: PointerEvent) {
+      if (!isDragging.current) {
+        return;
+      }
+
+      event.preventDefault();
+      updateFromEvent(event);
+    }
+
+    function stopDrag() {
+      isDragging.current = false;
+    }
+
+    canvas.addEventListener("pointerdown", startDrag, true);
+    window.addEventListener("pointermove", drag);
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", startDrag, true);
+      window.removeEventListener("pointermove", drag);
+      window.removeEventListener("pointerup", stopDrag);
+      window.removeEventListener("pointercancel", stopDrag);
+    };
+  }, [camera, floorPlane, gl, hitPoint, onUpdateCustomWall, pointer, raycaster, room]);
+
+  return null;
+}
+
 function Wall({
   length,
   height,
@@ -621,6 +770,7 @@ function CustomWall({
   isEditMode,
   isSelected,
   editorViewMode,
+  transformTool,
   pendingPlacementImageId,
   onSelectWall,
   onUpdateCustomWall,
@@ -631,6 +781,7 @@ function CustomWall({
   isEditMode: boolean;
   isSelected: boolean;
   editorViewMode: EditorViewMode;
+  transformTool: EditorTransformTool;
   pendingPlacementImageId: string | null;
   onSelectWall: (id: string) => void;
   onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
@@ -659,7 +810,7 @@ function CustomWall({
   }
 
   function startDrag(event: ThreeEvent<PointerEvent>) {
-    if (!isEditMode || pendingPlacementImageId || editorViewMode !== "topdown") {
+    if (!isEditMode || pendingPlacementImageId || editorViewMode !== "topdown" || transformTool !== "move") {
       return;
     }
 
@@ -716,6 +867,23 @@ function CustomWall({
         <planeGeometry args={[wall.length, wall.height]} />
         <meshStandardMaterial color="#eee8da" roughness={0.9} />
       </mesh>
+      {isEditMode && editorViewMode === "topdown" && !pendingPlacementImageId ? (
+        <mesh
+          position={[0, -wall.height / 2 + 0.08, 0]}
+          onClick={handleClick}
+          onPointerDown={startDrag}
+          onPointerMove={drag}
+          onPointerUp={stopDrag}
+          onPointerCancel={stopDrag}
+        >
+          <boxGeometry args={[wall.length, 0.08, 0.9]} />
+          <meshBasicMaterial
+            color={isSelected ? "#f6c453" : "#3b342c"}
+            transparent
+            opacity={isSelected ? 0.34 : 0.12}
+          />
+        </mesh>
+      ) : null}
     </group>
   );
 }
@@ -901,6 +1069,7 @@ export default function GalleryScene({
   doors,
   mode,
   editorViewMode,
+  transformTool,
   pendingPlacementImageId,
   selectedImageId,
   selectedWallId,
@@ -915,6 +1084,10 @@ export default function GalleryScene({
 }: GallerySceneProps) {
   const isEditMode = mode === "edit";
   const useTopdownEditor = isEditMode && editorViewMode === "topdown";
+  const selectedWallForDrag =
+    useTopdownEditor && transformTool === "move" && selectedWallId
+      ? customWalls.find((wall) => wall.id === selectedWallId) ?? null
+      : null;
 
   return (
     <Canvas
@@ -952,12 +1125,27 @@ export default function GalleryScene({
           isEditMode={isEditMode}
           isSelected={selectedWallId === wall.id}
           editorViewMode={editorViewMode}
+          transformTool={transformTool}
           pendingPlacementImageId={pendingPlacementImageId}
           onSelectWall={onSelectWall}
           onUpdateCustomWall={onUpdateCustomWall}
           onPlaceImageOnWall={onPlaceImageOnWall}
         />
       ))}
+      {selectedWallForDrag ? (
+        <>
+          <SelectedWallDragSurface
+            wall={selectedWallForDrag}
+            room={roomConfig}
+            onUpdateCustomWall={onUpdateCustomWall}
+          />
+          <SelectedWallDomDrag
+            wall={selectedWallForDrag}
+            room={roomConfig}
+            onUpdateCustomWall={onUpdateCustomWall}
+          />
+        </>
+      ) : null}
       {doors.map((door) => (
         <Door
           key={door.id}

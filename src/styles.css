@@ -523,6 +523,83 @@ h1 {
   background: #2e4c3e;
 }
 
+.object-inspector {
+  border-color: rgba(48, 42, 34, 0.18);
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.54), rgba(231, 224, 210, 0.4)),
+    rgba(255, 255, 255, 0.42);
+}
+
+.transform-tools {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #e3d8c8;
+}
+
+.transform-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 36px;
+  border-radius: 6px;
+  color: #5f5346;
+  background: transparent;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.transform-tools button.active {
+  color: #fffaf0;
+  background: #332b24;
+}
+
+.empty-inspector {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  color: #675a4b;
+  background: rgba(255, 255, 255, 0.48);
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.inspector-fields {
+  display: grid;
+  gap: 14px;
+}
+
+.object-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(75, 62, 48, 0.14);
+  border-radius: 8px;
+  background: #fbf7ef;
+}
+
+.object-title strong {
+  overflow: hidden;
+  color: #211b15;
+  font-size: 0.92rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-title span {
+  flex: none;
+  color: #6a5c4c;
+  font-size: 0.74rem;
+  font-weight: 900;
+}
+
 .room-selector {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
