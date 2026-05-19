@@ -89,6 +89,7 @@ const eyeHeight = 1.75;
 const wallInset = 0.18;
 const customWallDepth = 0.18;
 const wallSurfaceOffset = customWallDepth / 2 + 0.012;
+const artworkFrameDepth = 0.035;
 const wallOrder: GalleryWall[] = ["north", "west", "east", "south"];
 
 function getRoomDimensions(room: GalleryRoomConfig, roomIndex: number) {
@@ -2687,6 +2688,9 @@ function Artwork({
   const aspect = image.width / image.height || 1.42;
   const width = layout.width;
   const height = width / aspect;
+  const frameOuterWidth = width + 0.28;
+  const frameOuterHeight = height + 0.28;
+  const selectionSize = 0.045;
 
   useMemo(() => {
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -2719,29 +2723,43 @@ function Artwork({
     <group position={mount.position} rotation={mount.rotation}>
       <group position={[layout.offset, layout.height, 0]}>
         {isSelected ? (
-          <mesh position={[0, 0, 0.01]}>
-            <planeGeometry args={[width + 0.62, height + 0.62]} />
-            <meshBasicMaterial color="#f6c453" transparent opacity={0.9} />
-          </mesh>
+          <group position={[0, 0, artworkFrameDepth + 0.012]}>
+            <mesh position={[0, frameOuterHeight / 2 + selectionSize / 2, 0]}>
+              <boxGeometry args={[frameOuterWidth + selectionSize * 2, selectionSize, 0.014]} />
+              <meshBasicMaterial color="#f6c453" />
+            </mesh>
+            <mesh position={[0, -frameOuterHeight / 2 - selectionSize / 2, 0]}>
+              <boxGeometry args={[frameOuterWidth + selectionSize * 2, selectionSize, 0.014]} />
+              <meshBasicMaterial color="#f6c453" />
+            </mesh>
+            <mesh position={[-frameOuterWidth / 2 - selectionSize / 2, 0, 0]}>
+              <boxGeometry args={[selectionSize, frameOuterHeight + selectionSize * 2, 0.014]} />
+              <meshBasicMaterial color="#f6c453" />
+            </mesh>
+            <mesh position={[frameOuterWidth / 2 + selectionSize / 2, 0, 0]}>
+              <boxGeometry args={[selectionSize, frameOuterHeight + selectionSize * 2, 0.014]} />
+              <meshBasicMaterial color="#f6c453" />
+            </mesh>
+          </group>
         ) : null}
         <mesh
-          position={[0, 0, 0.035]}
+          position={[0, 0, artworkFrameDepth / 2]}
           castShadow
           onClick={handleClick}
           userData={{ editableTarget }}
         >
-          <boxGeometry args={[width + 0.34, height + 0.34, 0.07]} />
+          <boxGeometry args={[frameOuterWidth, frameOuterHeight, artworkFrameDepth]} />
           <meshStandardMaterial color="#2f2a22" roughness={0.45} />
         </mesh>
-        <mesh position={[0, 0, 0.078]} onClick={handleClick} userData={{ editableTarget }}>
+        <mesh position={[0, 0, artworkFrameDepth + 0.006]} onClick={handleClick} userData={{ editableTarget }}>
           <planeGeometry args={[width + 0.1, height + 0.1]} />
           <meshStandardMaterial color="#f7f1e4" roughness={0.72} />
         </mesh>
-        <mesh position={[0, 0, 0.095]} onClick={handleClick} userData={{ editableTarget }}>
+        <mesh position={[0, 0, artworkFrameDepth + 0.012]} onClick={handleClick} userData={{ editableTarget }}>
           <planeGeometry args={[width, height]} />
           <meshBasicMaterial map={texture} toneMapped={false} />
         </mesh>
-        <pointLight position={[0, 1.35, 0.28]} intensity={0.55} distance={4.2} color="#fff6df" />
+        <pointLight position={[0, 1.35, 0.18]} intensity={0.55} distance={4.2} color="#fff6df" />
       </group>
     </group>
   );
