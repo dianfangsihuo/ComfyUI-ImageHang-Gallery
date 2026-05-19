@@ -117,6 +117,29 @@ function builtWallTarget(roomIndex: number, wall: GalleryWall): GalleryWallTarge
   return roomIndex === 0 ? wall : `room-${roomIndex}:${wall}`;
 }
 
+function customWallBackTarget(id: string) {
+  return `${id}:back`;
+}
+
+function parseCustomWallTarget(target: GalleryWallTarget, customWalls: GalleryCustomWall[]) {
+  const exact = customWalls.find((wall) => wall.id === target);
+
+  if (exact) {
+    return { wall: exact, side: 1 };
+  }
+
+  if (String(target).endsWith(":back")) {
+    const id = String(target).slice(0, -5);
+    const wall = customWalls.find((item) => item.id === id);
+
+    if (wall) {
+      return { wall, side: -1 };
+    }
+  }
+
+  return null;
+}
+
 function getRoomDimensions(room: GalleryRoomConfig, roomIndex: number): GalleryRoomDimensions {
   return room.rooms?.[roomIndex] ?? {
     width: room.width,
@@ -162,7 +185,7 @@ function getWallTargetLength(
     return getWallLength(room, built.wall, built.roomIndex);
   }
 
-  return customWalls.find((wall) => wall.id === target)?.length ?? room.width;
+  return parseCustomWallTarget(target, customWalls)?.wall.length ?? room.width;
 }
 
 function getWallTargetHeight(
@@ -176,7 +199,7 @@ function getWallTargetHeight(
     return getRoomDimensions(room, built.roomIndex).height;
   }
 
-  return customWalls.find((wall) => wall.id === target)?.height ?? room.height;
+  return parseCustomWallTarget(target, customWalls)?.wall.height ?? room.height;
 }
 
 function getWallOffsetLimit(
@@ -254,7 +277,10 @@ function calculateGalleryCapacity(
   const builtinTargets = Array.from({ length: room.roomCount }, (_, roomIndex) =>
     builtWallOptions.map(([wall]) => builtWallTarget(roomIndex, wall)),
   ).flat();
-  const allTargets = [...builtinTargets, ...customWalls.map((wall) => wall.id)];
+  const allTargets = [
+    ...builtinTargets,
+    ...customWalls.flatMap((wall) => [wall.id, customWallBackTarget(wall.id)]),
+  ];
 
   return allTargets.reduce((total, target) => {
     const usableLength = Math.max(0, getWallTargetLength(room, customWalls, target) - 2.4);
@@ -681,7 +707,10 @@ function App() {
 
     return [
       ...builtin,
-      ...customWalls.map((wall) => [wall.id, `${wall.name}`] as [GalleryWallTarget, string]),
+      ...customWalls.flatMap((wall) => [
+        [wall.id, `${wall.name} 正面`] as [GalleryWallTarget, string],
+        [customWallBackTarget(wall.id), `${wall.name} 背面`] as [GalleryWallTarget, string],
+      ]),
     ];
   }
 
@@ -771,7 +800,7 @@ function App() {
 
     const removedWallIds = customWalls
       .filter((wall) => wall.roomIndex === roomIndex)
-      .map((wall) => wall.id);
+      .flatMap((wall) => [wall.id, customWallBackTarget(wall.id)]);
     const removedWallIdSet = new Set(removedWallIds);
 
     setLayouts((currentLayouts) =>
@@ -908,10 +937,14 @@ function App() {
   }
 
   function deleteCustomWall(id: string) {
+    const backId = customWallBackTarget(id);
+
     setCustomWalls((current) => current.filter((wall) => wall.id !== id));
-    setDoors((current) => current.filter((door) => door.wall !== id));
+    setDoors((current) => current.filter((door) => door.wall !== id && door.wall !== backId));
     setLayouts((current) =>
-      Object.fromEntries(Object.entries(current).filter(([, layout]) => layout.wall !== id)),
+      Object.fromEntries(
+        Object.entries(current).filter(([, layout]) => layout.wall !== id && layout.wall !== backId),
+      ),
     );
     setSelectedObject(null);
     setSelectedWallId(null);
@@ -925,7 +958,7 @@ function App() {
       return built.roomIndex;
     }
 
-    return customWalls.find((item) => item.id === wall)?.roomIndex ?? selectedRoomIndex;
+    return parseCustomWallTarget(wall, customWalls)?.wall.roomIndex ?? selectedRoomIndex;
   }
 
   function addDoor() {

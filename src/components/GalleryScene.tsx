@@ -50,7 +50,7 @@ interface GallerySceneProps {
 
 type EditableHitTarget =
   | { kind: "artwork"; id: string; label: string }
-  | { kind: "customWall"; id: string; label: string }
+  | { kind: "customWall"; id: string; wall: GalleryWallTarget; label: string }
   | { kind: "door"; id: string; label: string }
   | { kind: "builtWall"; wall: GalleryWallTarget; roomIndex: number; label: string };
 
@@ -87,6 +87,8 @@ const fallbackRoom: GalleryRoomConfig = {
 const roomGap = 0.18;
 const eyeHeight = 1.75;
 const wallInset = 0.18;
+const customWallDepth = 0.18;
+const wallSurfaceOffset = customWallDepth / 2 + 0.012;
 const wallOrder: GalleryWall[] = ["north", "west", "east", "south"];
 
 function getRoomDimensions(room: GalleryRoomConfig, roomIndex: number) {
@@ -176,6 +178,43 @@ function getCustomWallMount(room: GalleryRoomConfig, wall: GalleryCustomWall) {
   };
 }
 
+function customWallBackTarget(id: string) {
+  return `${id}:back`;
+}
+
+function parseCustomWallTarget(target: GalleryWallTarget, customWalls: GalleryCustomWall[]) {
+  const exact = customWalls.find((wall) => wall.id === target);
+
+  if (exact) {
+    return { wall: exact, side: 1 };
+  }
+
+  if (String(target).endsWith(":back")) {
+    const id = String(target).slice(0, -5);
+    const wall = customWalls.find((item) => item.id === id);
+
+    if (wall) {
+      return { wall, side: -1 };
+    }
+  }
+
+  return null;
+}
+
+function getCustomWallFaceMount(room: GalleryRoomConfig, wall: GalleryCustomWall, side = 1) {
+  const mount = getCustomWallMount(room, wall);
+  const rotationY = wall.rotation + (side < 0 ? Math.PI : 0);
+  const normal = new THREE.Vector3(0, 0, side).applyEuler(
+    new THREE.Euler(0, wall.rotation, 0, "XYZ"),
+  );
+  const position = new THREE.Vector3(...mount.position).addScaledVector(normal, wallSurfaceOffset);
+
+  return {
+    position: [position.x, position.y, position.z] as [number, number, number],
+    rotation: [0, rotationY, 0] as [number, number, number],
+  };
+}
+
 function getWallBasis(
   room: GalleryRoomConfig,
   wall: GalleryWallTarget,
@@ -201,12 +240,12 @@ function getWallBasis(
     };
   }
 
-  const customWall = customWalls.find((item) => item.id === wall);
-  if (!customWall) {
+  const customTarget = parseCustomWallTarget(wall, customWalls);
+  if (!customTarget) {
     return null;
   }
 
-  const mount = getCustomWallMount(room, customWall);
+  const mount = getCustomWallFaceMount(room, customTarget.wall, customTarget.side);
   const normal = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(...mount.rotation, "XYZ"));
   const axis = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(...mount.rotation, "XYZ"));
 
@@ -215,8 +254,8 @@ function getWallBasis(
     position: new THREE.Vector3(...mount.position),
     normal,
     axis,
-    height: customWall.height,
-    length: customWall.length,
+    height: customTarget.wall.height,
+    length: customTarget.wall.length,
   };
 }
 
@@ -225,7 +264,10 @@ function getAllWallTargets(room: GalleryRoomConfig, customWalls: GalleryCustomWa
     wallOrder.map((wall) => builtWallTarget(roomIndex, wall)),
   ).flat();
 
-  return [...builtTargets, ...customWalls.map((wall) => wall.id)];
+  return [
+    ...builtTargets,
+    ...customWalls.flatMap((wall) => [wall.id, customWallBackTarget(wall.id)]),
+  ];
 }
 
 function getDoorWorldPosition(
@@ -915,7 +957,7 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
     const canvas = gl.domElement;
 
     const onPointerDown = (event: PointerEvent) => {
-      if (event.target !== canvas || event.button !== 0) {
+      if (event.target !== canvas || event.button !== 0 || event.shiftKey) {
         return;
       }
 
@@ -1220,7 +1262,13 @@ function Room({
     onSelectRoom(roomIndex);
   };
   const startDrag = (event: ThreeEvent<PointerEvent>) => {
-    if (!isEditMode || editorViewMode !== "topdown" || transformTool !== "move" || pendingPlacementImageId) {
+    if (
+      !isEditMode ||
+      editorViewMode !== "topdown" ||
+      transformTool !== "move" ||
+      pendingPlacementImageId ||
+      !event.shiftKey
+    ) {
       return;
     }
 
@@ -1371,6 +1419,10 @@ function SelectedWallDragSurface({
   }
 
   function startDrag(event: ThreeEvent<PointerEvent>) {
+    if (!event.shiftKey) {
+      return;
+    }
+
     event.stopPropagation();
     isDragging.current = true;
     const target = event.target as HTMLElement;
@@ -1466,7 +1518,7 @@ function SelectedWallDomDrag({
     }
 
     function startDrag(event: PointerEvent) {
-      if (event.button !== 0 || event.target !== canvas) {
+      if (event.button !== 0 || event.target !== canvas || !event.shiftKey) {
         return;
       }
 
@@ -1796,7 +1848,7 @@ function FirstPersonEditorPicker({
 
         if (wall) {
           return getPlacementFromWorldPoint(room, basePoint, {
-            wall: wall.id,
+            wall: target.wall,
             wallOffset: local.x,
             wallHeight: clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45),
             label: wall.name,
@@ -1854,7 +1906,7 @@ function FirstPersonEditorPicker({
     const local = hit.object.worldToLocal(hit.point.clone());
 
     onPlaceImageOnWall(
-      wall.id,
+      target.wall,
       local.x,
       clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45),
     );
@@ -2089,10 +2141,17 @@ function CustomWall({
   const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
   const dragPoint = useMemo(() => new THREE.Vector3(), []);
   const isDragging = useRef(false);
-  const editableTarget: EditableHitTarget = {
+  const frontTarget: EditableHitTarget = {
     kind: "customWall",
     id: wall.id,
+    wall: wall.id,
     label: wall.name,
+  };
+  const backTarget: EditableHitTarget = {
+    kind: "customWall",
+    id: wall.id,
+    wall: customWallBackTarget(wall.id),
+    label: `${wall.name} 背面`,
   };
 
   function selectWall() {
@@ -2101,7 +2160,7 @@ function CustomWall({
     }
   }
 
-  function handleClick(event: ThreeEvent<MouseEvent>) {
+  function handleClick(event: ThreeEvent<MouseEvent>, target: EditableHitTarget = frontTarget) {
     if (!isEditMode) {
       return;
     }
@@ -2118,11 +2177,21 @@ function CustomWall({
     }
 
     const local = event.object.worldToLocal(event.point.clone());
-    onPlaceImageOnWall(wall.id, local.x, clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45));
+    onPlaceImageOnWall(
+      target.kind === "customWall" ? target.wall : wall.id,
+      local.x,
+      clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45),
+    );
   }
 
   function startDrag(event: ThreeEvent<PointerEvent>) {
-    if (!isEditMode || pendingPlacementImageId || editorViewMode !== "topdown" || transformTool !== "move") {
+    if (
+      !isEditMode ||
+      pendingPlacementImageId ||
+      editorViewMode !== "topdown" ||
+      transformTool !== "move" ||
+      !event.shiftKey
+    ) {
       return;
     }
 
@@ -2158,8 +2227,8 @@ function CustomWall({
   return (
     <group position={[xOffset + wall.x, wall.height / 2, wall.z]} rotation={[0, wall.rotation, 0]}>
       {isSelected ? (
-        <mesh position={[0, 0, 0]} onClick={handleClick} userData={{ editableTarget }}>
-          <boxGeometry args={[wall.length + 0.28, wall.height + 0.18, 0.24]} />
+        <mesh position={[0, 0, 0]} onClick={(event) => handleClick(event)} userData={{ editableTarget: frontTarget }}>
+          <boxGeometry args={[wall.length + 0.28, wall.height + 0.18, customWallDepth + 0.08]} />
           <meshBasicMaterial color="#f6c453" transparent opacity={0.28} />
         </mesh>
       ) : null}
@@ -2171,24 +2240,37 @@ function CustomWall({
         onPointerCancel={stopDrag}
         receiveShadow
         castShadow
-        userData={{ editableTarget }}
+        userData={{ editableTarget: frontTarget }}
       >
-        <boxGeometry args={[wall.length, wall.height, 0.18]} />
+        <boxGeometry args={[wall.length, wall.height, customWallDepth]} />
         <meshStandardMaterial color={isSelected ? "#e7dbc0" : "#ded7c8"} roughness={0.82} />
       </mesh>
-      <mesh position={[0, 0, 0.096]} onClick={handleClick} userData={{ editableTarget }}>
+      <mesh
+        position={[0, 0, wallSurfaceOffset]}
+        onClick={(event) => handleClick(event, frontTarget)}
+        userData={{ editableTarget: frontTarget }}
+      >
         <planeGeometry args={[wall.length, wall.height]} />
-        <meshStandardMaterial color="#eee8da" roughness={0.9} />
+        <meshStandardMaterial color="#eee8da" roughness={0.9} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh
+        position={[0, 0, -wallSurfaceOffset]}
+        rotation={[0, Math.PI, 0]}
+        onClick={(event) => handleClick(event, backTarget)}
+        userData={{ editableTarget: backTarget }}
+      >
+        <planeGeometry args={[wall.length, wall.height]} />
+        <meshStandardMaterial color="#e4ddcf" roughness={0.9} side={THREE.DoubleSide} />
       </mesh>
       {isEditMode && editorViewMode === "topdown" && !pendingPlacementImageId ? (
         <mesh
           position={[0, -wall.height / 2 + 0.08, 0]}
-          onClick={handleClick}
+          onClick={(event) => handleClick(event)}
           onPointerDown={startDrag}
           onPointerMove={drag}
           onPointerUp={stopDrag}
           onPointerCancel={stopDrag}
-          userData={{ editableTarget }}
+          userData={{ editableTarget: frontTarget }}
         >
           <boxGeometry args={[wall.length, 0.08, 0.9]} />
           <meshBasicMaterial
@@ -2226,13 +2308,11 @@ function Door({
   onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
 }) {
   const builtWall = parseBuiltWallTarget(door.wall);
-  const customWall = builtWall
-    ? null
-    : customWalls.find((wall) => wall.id === door.wall) ?? null;
+  const customTarget = builtWall ? null : parseCustomWallTarget(door.wall, customWalls);
   const mount = builtWall
     ? getWallMount(room, builtWall.wall, builtWall.roomIndex, 0)
-    : customWall
-      ? getCustomWallMount(room, customWall)
+    : customTarget
+      ? getCustomWallFaceMount(room, customTarget.wall, customTarget.side)
       : null;
 
   if (!mount) {
@@ -2253,7 +2333,7 @@ function Door({
   const leafHeight = Math.max(0.8, door.height - 0.1);
 
   function startDrag(event: ThreeEvent<PointerEvent>) {
-    if (!isEditMode || editorViewMode !== "topdown" || transformTool !== "move" || !wallBasis) {
+    if (!isEditMode || editorViewMode !== "topdown" || transformTool !== "move" || !wallBasis || !event.shiftKey) {
       return;
     }
 
@@ -2597,13 +2677,11 @@ function Artwork({
   onSelect: () => void;
 }) {
   const builtWall = parseBuiltWallTarget(layout.wall);
-  const customWall = builtWall
-    ? null
-    : customWalls.find((wall) => wall.id === layout.wall) ?? null;
+  const customTarget = builtWall ? null : parseCustomWallTarget(layout.wall, customWalls);
   const mount = builtWall
     ? getWallMount(room, builtWall.wall, builtWall.roomIndex)
-    : customWall
-      ? getCustomWallMount(room, customWall)
+    : customTarget
+      ? getCustomWallFaceMount(room, customTarget.wall, customTarget.side)
       : null;
   const texture = useLoader(THREE.TextureLoader, image.url);
   const aspect = image.width / image.height || 1.42;
@@ -2641,29 +2719,29 @@ function Artwork({
     <group position={mount.position} rotation={mount.rotation}>
       <group position={[layout.offset, layout.height, 0]}>
         {isSelected ? (
-          <mesh position={[0, 0, 0.015]}>
+          <mesh position={[0, 0, 0.01]}>
             <planeGeometry args={[width + 0.62, height + 0.62]} />
             <meshBasicMaterial color="#f6c453" transparent opacity={0.9} />
           </mesh>
         ) : null}
         <mesh
-          position={[0, 0, 0.05]}
+          position={[0, 0, 0.035]}
           castShadow
           onClick={handleClick}
           userData={{ editableTarget }}
         >
-          <boxGeometry args={[width + 0.34, height + 0.34, 0.12]} />
+          <boxGeometry args={[width + 0.34, height + 0.34, 0.07]} />
           <meshStandardMaterial color="#2f2a22" roughness={0.45} />
         </mesh>
-        <mesh position={[0, 0, 0.13]} onClick={handleClick} userData={{ editableTarget }}>
+        <mesh position={[0, 0, 0.078]} onClick={handleClick} userData={{ editableTarget }}>
           <planeGeometry args={[width + 0.1, height + 0.1]} />
           <meshStandardMaterial color="#f7f1e4" roughness={0.72} />
         </mesh>
-        <mesh position={[0, 0, 0.2]} onClick={handleClick} userData={{ editableTarget }}>
+        <mesh position={[0, 0, 0.095]} onClick={handleClick} userData={{ editableTarget }}>
           <planeGeometry args={[width, height]} />
           <meshBasicMaterial map={texture} toneMapped={false} />
         </mesh>
-        <pointLight position={[0, 1.35, 0.45]} intensity={0.55} distance={4.2} color="#fff6df" />
+        <pointLight position={[0, 1.35, 0.28]} intensity={0.55} distance={4.2} color="#fff6df" />
       </group>
     </group>
   );
