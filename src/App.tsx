@@ -124,6 +124,27 @@ function getRoomDimensions(room: GalleryRoomConfig, roomIndex: number): GalleryR
   };
 }
 
+function getLinearRoomOffset(room: GalleryRoomConfig, roomIndex: number) {
+  let offset = 0;
+
+  for (let index = 0; index < roomIndex; index += 1) {
+    const current = getRoomDimensions(room, index);
+    const next = getRoomDimensions(room, index + 1);
+    offset += current.width / 2 + next.width / 2 + 2.2;
+  }
+
+  return offset;
+}
+
+function getRoomCenter(room: GalleryRoomConfig, roomIndex: number) {
+  const dimensions = getRoomDimensions(room, roomIndex);
+
+  return {
+    x: Number.isFinite(dimensions.x) ? dimensions.x ?? 0 : getLinearRoomOffset(room, roomIndex),
+    z: Number.isFinite(dimensions.z) ? dimensions.z ?? 0 : 0,
+  };
+}
+
 function getWallLength(room: GalleryRoomConfig, wall: GalleryWall, roomIndex = 0) {
   const dimensions = getRoomDimensions(room, roomIndex);
   return wall === "north" || wall === "south" ? dimensions.width : dimensions.depth;
@@ -548,7 +569,7 @@ function App() {
     }));
   }
 
-  function updateRoomConfig(patch: Partial<GalleryRoomConfig>) {
+  function updateRoomConfig(patch: Partial<GalleryRoomConfig & GalleryRoomDimensions>) {
     setRoomConfig((current) => {
       const roomCount = Math.round(clamp(patch.roomCount ?? current.roomCount, 1, 5));
       const rooms = getRoomList(current, roomCount).map((room, index) => {
@@ -560,6 +581,8 @@ function App() {
           width: clamp(patch.width ?? room.width, 4, 40),
           depth: clamp(patch.depth ?? room.depth, 6, 48),
           height: clamp(patch.height ?? room.height, 3.2, 9),
+          x: clamp(patch.x ?? room.x ?? getLinearRoomOffset(current, index), -80, 80),
+          z: clamp(patch.z ?? room.z ?? 0, -80, 80),
         };
       });
       const next = {
@@ -617,6 +640,33 @@ function App() {
       );
 
       return next;
+    });
+  }
+
+  function updateRoom(roomIndex: number, patch: Partial<GalleryRoomDimensions>) {
+    setRoomConfig((current) => {
+      const rooms = getRoomList(current).map((room, index) =>
+        index === roomIndex
+          ? {
+              ...room,
+              ...patch,
+              width: clamp(patch.width ?? room.width, 4, 40),
+              depth: clamp(patch.depth ?? room.depth, 6, 48),
+              height: clamp(patch.height ?? room.height, 3.2, 9),
+              x: clamp(patch.x ?? room.x ?? getLinearRoomOffset(current, index), -80, 80),
+              z: clamp(patch.z ?? room.z ?? 0, -80, 80),
+            }
+          : room,
+      );
+      const first = rooms[0] ?? getRoomDimensions(current, 0);
+
+      return {
+        ...current,
+        width: first.width,
+        depth: first.depth,
+        height: first.height,
+        rooms,
+      };
     });
   }
 
@@ -687,11 +737,24 @@ function App() {
     const nextRoomNumber = roomConfig.roomCount + 1;
     setRoomConfig((current) => {
       const template = getRoomDimensions(current, selectedRoomIndex);
+      const rooms = getRoomList(current);
+      const lastIndex = rooms.length - 1;
+      const lastRoom = rooms[lastIndex] ?? template;
+      const lastCenter = getRoomCenter(current, Math.max(0, lastIndex));
 
       return {
         ...current,
         roomCount: Math.round(clamp(current.roomCount + 1, 1, 5)),
-        rooms: [...getRoomList(current), { ...template }],
+        rooms: [
+          ...rooms,
+          {
+            width: template.width,
+            depth: template.depth,
+            height: template.height,
+            x: lastCenter.x + lastRoom.width / 2 + template.width / 2 + 2.2,
+            z: template.z ?? 0,
+          },
+        ],
       };
     });
     selectRoom(roomConfig.roomCount);
@@ -990,6 +1053,16 @@ function App() {
     }
 
     if (selectedObject.type === "room") {
+      if (transformTool === "move") {
+        const room = getRoomDimensions(roomConfig, selectedObject.roomIndex);
+        updateRoom(selectedObject.roomIndex, {
+          x: (room.x ?? getLinearRoomOffset(roomConfig, selectedObject.roomIndex)) +
+            (axis === "x" ? amount : 0),
+          z: (room.z ?? 0) + (axis === "z" ? amount : 0),
+        });
+        return;
+      }
+
       updateRoomConfig(
         axis === "z"
           ? { depth: roomConfig.depth + amount }
@@ -1264,6 +1337,7 @@ function App() {
           onSelectWall={selectWall}
           onSelectDoor={selectDoor}
           onSelectRoom={selectRoom}
+          onUpdateRoom={updateRoom}
           onUpdateImageLayout={updateImageLayout}
           onUpdateCustomWall={updateCustomWall}
           onUpdateDoor={updateDoor}
@@ -1604,6 +1678,33 @@ function App() {
                   <strong>{selectedRoomLabel}</strong>
                   <span>房间</span>
                 </div>
+
+                {transformTool === "move" ? (
+                  <>
+                    <label className="field">
+                      <span>X {((selectedRoomDimensions.x ?? getLinearRoomOffset(roomConfig, selectedRoomIndex))).toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="-80"
+                        max="80"
+                        step="0.5"
+                        value={selectedRoomDimensions.x ?? getLinearRoomOffset(roomConfig, selectedRoomIndex)}
+                        onChange={(event) => updateRoom(selectedRoomIndex, { x: Number(event.target.value) })}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>Z {(selectedRoomDimensions.z ?? 0).toFixed(1)}</span>
+                      <input
+                        type="range"
+                        min="-80"
+                        max="80"
+                        step="0.5"
+                        value={selectedRoomDimensions.z ?? 0}
+                        onChange={(event) => updateRoom(selectedRoomIndex, { z: Number(event.target.value) })}
+                      />
+                    </label>
+                  </>
+                ) : null}
 
                 {transformTool === "scale" ? (
                   <>

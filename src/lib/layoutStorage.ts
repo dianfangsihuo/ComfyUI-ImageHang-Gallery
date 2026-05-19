@@ -4,6 +4,7 @@ import type {
   GalleryDoor,
   GalleryLayouts,
   GalleryRoomConfig,
+  GalleryRoomDimensions,
 } from "../types";
 
 const LAYOUT_STORAGE_KEY = "image-hang.gallery-layouts";
@@ -85,12 +86,14 @@ export function loadStoredRoomConfig(): GalleryRoomConfig {
       : defaultRoomConfig.roomCount;
     const parsedRooms = Array.isArray(parsed.rooms) ? parsed.rooms : [];
     const rooms = Array.from({ length: roomCount }, (_, index) => {
-      const room = parsedRooms[index] as Partial<GalleryRoomConfig> | undefined;
+      const room = parsedRooms[index] as Partial<GalleryRoomDimensions> | undefined;
 
       return {
         width: clampNumber(room?.width, width, 4, 40),
         depth: clampNumber(room?.depth, depth, 6, 48),
         height: clampNumber(room?.height, height, 3.2, 9),
+        x: clampNumber(room?.x, index === 0 ? 0 : index * (width + 2.2), -80, 80),
+        z: clampNumber(room?.z, 0, -80, 80),
       };
     });
 

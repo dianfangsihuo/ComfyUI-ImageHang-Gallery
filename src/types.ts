@@ -57,6 +57,8 @@ export interface GalleryRoomDimensions {
   width: number;
   depth: number;
   height: number;
+  x?: number;
+  z?: number;
 }
 
 export interface GalleryCustomWall {
