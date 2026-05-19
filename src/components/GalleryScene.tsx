@@ -234,6 +234,7 @@ function getWallBasis(
     return {
       target: wall,
       position: new THREE.Vector3(...mount.position),
+      rotation: mount.rotation,
       normal,
       axis,
       height: getRoomDimensions(room, built.roomIndex).height,
@@ -253,6 +254,7 @@ function getWallBasis(
   return {
     target: wall,
     position: new THREE.Vector3(...mount.position),
+    rotation: mount.rotation,
     normal,
     axis,
     height: customTarget.wall.height,
@@ -1674,18 +1676,52 @@ function FirstPersonAimFollower({
   onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
   onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
 }) {
-  const { camera } = useThree();
+  const { camera, scene } = useThree();
   const ray = useMemo(() => new THREE.Ray(), []);
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const center = useMemo(() => new THREE.Vector2(0, 0), []);
   const floorPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
   const hitPoint = useMemo(() => new THREE.Vector3(), []);
   const direction = useMemo(() => new THREE.Vector3(), []);
   const lastUpdate = useRef(0);
 
+  function getCurrentWallPlacement() {
+    raycaster.setFromCamera(center, camera);
+    const hit = findEditableHit(raycaster.intersectObjects(scene.children, true), {
+      wallOnly: true,
+    });
+
+    if (!hit || (hit.target.kind !== "builtWall" && hit.target.kind !== "customWall")) {
+      return null;
+    }
+
+    const basis = getWallBasis(room, hit.target.wall, customWalls);
+    if (!basis) {
+      return null;
+    }
+
+    const offset = hit.point.clone().sub(basis.position).dot(basis.axis);
+    const height = hit.point.y;
+
+    if (
+      Math.abs(offset) > basis.length / 2 ||
+      height < 0.25 ||
+      height > basis.height + 0.2
+    ) {
+      return null;
+    }
+
+    return {
+      wall: hit.target.wall,
+      offset,
+      height,
+    };
+  }
+
   useFrame((state) => {
     if (
       !isGrabActive ||
-      transformTool !== "move" ||
-      document.pointerLockElement !== state.gl.domElement
+      transformTool !== "move"
     ) {
       return;
     }
@@ -1726,63 +1762,21 @@ function FirstPersonAimFollower({
       return;
     }
 
-    let bestHit:
-      | {
-          distance: number;
-          wall: GalleryWallTarget;
-          offset: number;
-          height: number;
-        }
-      | null = null;
-
-    for (const target of getAllWallTargets(room, customWalls)) {
-      const basis = getWallBasis(room, target, customWalls);
-      if (!basis) {
-        continue;
-      }
-
-      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(basis.normal, basis.position);
-      if (!ray.intersectPlane(plane, hitPoint)) {
-        continue;
-      }
-
-      const local = hitPoint.clone().sub(basis.position);
-      const offset = local.dot(basis.axis);
-      const height = hitPoint.y;
-
-      if (
-        Math.abs(offset) > basis.length / 2 ||
-        height < 0.25 ||
-        height > basis.height + 0.2
-      ) {
-        continue;
-      }
-
-      const distance = hitPoint.distanceTo(camera.position);
-      if (!bestHit || distance < bestHit.distance) {
-        bestHit = {
-          distance,
-          wall: target,
-          offset,
-          height,
-        };
-      }
-    }
-
-    if (!bestHit) {
+    const wallHit = getCurrentWallPlacement();
+    if (!wallHit) {
       return;
     }
 
     if (selectedImageId) {
       const current = layouts[selectedImageId];
       onUpdateImageLayout(selectedImageId, {
-        wall: bestHit.wall,
+        wall: wallHit.wall,
         offset: current
-          ? THREE.MathUtils.lerp(current.offset, bestHit.offset, 0.22)
-          : bestHit.offset,
+          ? THREE.MathUtils.lerp(current.offset, wallHit.offset, 0.22)
+          : wallHit.offset,
         height: current
-          ? THREE.MathUtils.lerp(current.height, bestHit.height, 0.22)
-          : bestHit.height,
+          ? THREE.MathUtils.lerp(current.height, wallHit.height, 0.22)
+          : wallHit.height,
       });
       return;
     }
@@ -1790,10 +1784,10 @@ function FirstPersonAimFollower({
     if (selectedDoorId) {
       const currentDoor = doors.find((door) => door.id === selectedDoorId);
       onUpdateDoor(selectedDoorId, {
-        wall: bestHit.wall,
+        wall: wallHit.wall,
         offset: currentDoor
-          ? THREE.MathUtils.lerp(currentDoor.offset, bestHit.offset, 0.22)
-          : bestHit.offset,
+          ? THREE.MathUtils.lerp(currentDoor.offset, wallHit.offset, 0.22)
+          : wallHit.offset,
       });
     }
   });
@@ -2371,10 +2365,28 @@ function CustomWall({
       rotation={[0, wall.rotation, 0]}
     >
       {isSelected ? (
-        <mesh position={[0, 0, 0]} raycast={() => null}>
-          <boxGeometry args={[wall.length + 0.28, wall.height + 0.18, customWallDepth + 0.08]} />
-          <meshBasicMaterial color="#f6c453" transparent opacity={0.28} />
-        </mesh>
+        <>
+          {[-1, 1].map((side) => (
+            <group key={side} position={[0, 0, side * (wallSurfaceOffset + 0.012)]}>
+              <mesh position={[0, wall.height / 2 + 0.035, 0]} raycast={() => null}>
+                <boxGeometry args={[wall.length + 0.12, 0.07, 0.012]} />
+                <meshBasicMaterial color="#f6c453" />
+              </mesh>
+              <mesh position={[0, -wall.height / 2 - 0.035, 0]} raycast={() => null}>
+                <boxGeometry args={[wall.length + 0.12, 0.07, 0.012]} />
+                <meshBasicMaterial color="#f6c453" />
+              </mesh>
+              <mesh position={[-wall.length / 2 - 0.035, 0, 0]} raycast={() => null}>
+                <boxGeometry args={[0.07, wall.height + 0.14, 0.012]} />
+                <meshBasicMaterial color="#f6c453" />
+              </mesh>
+              <mesh position={[wall.length / 2 + 0.035, 0, 0]} raycast={() => null}>
+                <boxGeometry args={[0.07, wall.height + 0.14, 0.012]} />
+                <meshBasicMaterial color="#f6c453" />
+              </mesh>
+            </group>
+          ))}
+        </>
       ) : null}
       <mesh
         position={[0, 0, wallSurfaceOffset + 0.006]}
@@ -2841,12 +2853,8 @@ function Artwork({
   editorViewMode: EditorViewMode;
   onSelect: () => void;
 }) {
-  const builtWall = parseBuiltWallTarget(layout.wall);
-  const customTarget = builtWall ? null : parseCustomWallTarget(layout.wall, customWalls);
-  const mount = builtWall ? getWallMount(room, builtWall.wall, builtWall.roomIndex) : null;
-  const customMount = customTarget
-    ? getCustomWallFaceMount(room, customTarget.wall, customTarget.side)
-    : null;
+  const wallBasis = getWallBasis(room, layout.wall, customWalls);
+  const customTarget = parseCustomWallTarget(layout.wall, customWalls);
   const texture = useLoader(THREE.TextureLoader, image.url);
   const aspect = image.width / image.height || 1.42;
   const width = layout.width;
@@ -2862,7 +2870,7 @@ function Artwork({
   }, [texture]);
 
   if (
-    (!mount && !customMount) ||
+    !wallBasis ||
     layoutOverlapsDoorOpening(room, customWalls, doors, layout, width + 0.34, height + 0.34)
   ) {
     return null;
@@ -2888,8 +2896,8 @@ function Artwork({
 
   return (
     <group
-      position={customMount?.position ?? mount!.position}
-      rotation={customMount?.rotation ?? mount!.rotation}
+      position={[wallBasis.position.x, wallBasis.position.y, wallBasis.position.z]}
+      rotation={wallBasis.rotation}
     >
       <group position={[0, 0, artworkZ]}>
         <group position={[layout.offset, layout.height, 0]}>
