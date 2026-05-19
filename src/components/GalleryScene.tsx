@@ -60,6 +60,13 @@ type EditableHit = {
   point: THREE.Vector3;
 };
 
+type WallOpening = {
+  id: string;
+  offset: number;
+  width: number;
+  height: number;
+};
+
 const fallbackRoom: GalleryRoomConfig = {
   width: 18,
   depth: 22,
@@ -131,14 +138,14 @@ function getWallLength(room: GalleryRoomConfig, wall: GalleryWall, roomIndex = 0
   return wall === "north" || wall === "south" ? dimensions.width : dimensions.depth;
 }
 
-function getWallMount(room: GalleryRoomConfig, wall: GalleryWall, roomIndex = 0) {
+function getWallMount(room: GalleryRoomConfig, wall: GalleryWall, roomIndex = 0, inset = wallInset) {
   const center = getRoomCenter(room, roomIndex);
   const dimensions = getRoomDimensions(room, roomIndex);
   const mounts = {
-    north: { position: [center.x, 0, center.z - dimensions.depth / 2 + wallInset], rotation: [0, 0, 0] },
-    south: { position: [center.x, 0, center.z + dimensions.depth / 2 - wallInset], rotation: [0, Math.PI, 0] },
-    west: { position: [center.x - dimensions.width / 2 + wallInset, 0, center.z], rotation: [0, Math.PI / 2, 0] },
-    east: { position: [center.x + dimensions.width / 2 - wallInset, 0, center.z], rotation: [0, -Math.PI / 2, 0] },
+    north: { position: [center.x, 0, center.z - dimensions.depth / 2 + inset], rotation: [0, 0, 0] },
+    south: { position: [center.x, 0, center.z + dimensions.depth / 2 - inset], rotation: [0, Math.PI, 0] },
+    west: { position: [center.x - dimensions.width / 2 + inset, 0, center.z], rotation: [0, Math.PI / 2, 0] },
+    east: { position: [center.x + dimensions.width / 2 - inset, 0, center.z], rotation: [0, -Math.PI / 2, 0] },
   } satisfies Record<
     GalleryWall,
     {
@@ -159,11 +166,16 @@ function getCustomWallMount(room: GalleryRoomConfig, wall: GalleryCustomWall) {
   };
 }
 
-function getWallBasis(room: GalleryRoomConfig, wall: GalleryWallTarget, customWalls: GalleryCustomWall[]) {
+function getWallBasis(
+  room: GalleryRoomConfig,
+  wall: GalleryWallTarget,
+  customWalls: GalleryCustomWall[],
+  inset = wallInset,
+) {
   const built = parseBuiltWallTarget(wall);
 
   if (built) {
-    const mount = getWallMount(room, built.wall, built.roomIndex);
+    const mount = getWallMount(room, built.wall, built.roomIndex, inset);
     const normal = new THREE.Vector3(0, 0, 1).applyEuler(
       new THREE.Euler(...mount.rotation, "XYZ"),
     );
@@ -211,7 +223,7 @@ function getDoorWorldPosition(
   customWalls: GalleryCustomWall[],
   door: GalleryDoor,
 ) {
-  const basis = getWallBasis(room, door.wall, customWalls);
+  const basis = getWallBasis(room, door.wall, customWalls, 0);
 
   if (!basis) {
     return null;
@@ -220,7 +232,130 @@ function getDoorWorldPosition(
   return basis.position
     .clone()
     .addScaledVector(basis.axis, door.offset)
-    .addScaledVector(basis.normal, 0.42);
+    .addScaledVector(basis.normal, 0.06);
+}
+
+function getRoomBoundaryEntryPoint(
+  room: GalleryRoomConfig,
+  roomIndex: number,
+  fromPoint: THREE.Vector3,
+  inset = 1.3,
+) {
+  const center = getRoomCenter(room, roomIndex);
+  const dimensions = getRoomDimensions(room, roomIndex);
+  const direction = new THREE.Vector3(fromPoint.x - center.x, 0, fromPoint.z - center.z);
+
+  if (direction.lengthSq() < 0.0001) {
+    direction.set(0, 0, 1);
+  }
+
+  direction.normalize();
+
+  const halfWidth = dimensions.width / 2;
+  const halfDepth = dimensions.depth / 2;
+  const tx = Math.abs(direction.x) > 0.0001 ? halfWidth / Math.abs(direction.x) : Number.POSITIVE_INFINITY;
+  const tz = Math.abs(direction.z) > 0.0001 ? halfDepth / Math.abs(direction.z) : Number.POSITIVE_INFINITY;
+  const distance = Math.min(tx, tz);
+  const boundary = new THREE.Vector3(center.x, 0, center.z).addScaledVector(direction, distance);
+  const inside = boundary.clone().addScaledVector(direction, -inset);
+
+  inside.x = clamp(inside.x, center.x - halfWidth + 1.15, center.x + halfWidth - 1.15);
+  inside.z = clamp(inside.z, center.z - halfDepth + 1.15, center.z + halfDepth - 1.15);
+
+  return { boundary, inside };
+}
+
+function getDoorInnerPoint(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  door: GalleryDoor,
+  inset = 1.15,
+) {
+  const basis = getWallBasis(room, door.wall, customWalls, 0);
+
+  if (!basis) {
+    return null;
+  }
+
+  return basis.position
+    .clone()
+    .addScaledVector(basis.axis, door.offset)
+    .addScaledVector(basis.normal, inset);
+}
+
+function getConnectedRoomWallTarget(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  door: GalleryDoor,
+) {
+  if (door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
+    return null;
+  }
+
+  const start = getDoorWorldPosition(room, customWalls, door);
+  if (!start) {
+    return null;
+  }
+
+  const roomIndex = door.connectsToRoomIndex;
+  const center = getRoomCenter(room, roomIndex);
+  const dimensions = getRoomDimensions(room, roomIndex);
+  const targetEntry = getRoomBoundaryEntryPoint(room, roomIndex, start, 0.85);
+  const boundary = targetEntry.boundary;
+  const distances: Array<{ wall: GalleryWall; distance: number }> = [
+    { wall: "north", distance: Math.abs(boundary.z - (center.z - dimensions.depth / 2)) },
+    { wall: "south", distance: Math.abs(boundary.z - (center.z + dimensions.depth / 2)) },
+    { wall: "west", distance: Math.abs(boundary.x - (center.x - dimensions.width / 2)) },
+    { wall: "east", distance: Math.abs(boundary.x - (center.x + dimensions.width / 2)) },
+  ];
+  const wall = distances.sort((a, b) => a.distance - b.distance)[0].wall;
+  const target = builtWallTarget(roomIndex, wall);
+  const basis = getWallBasis(room, target, customWalls, 0);
+
+  if (!basis) {
+    return null;
+  }
+
+  return {
+    wall: target,
+    opening: {
+      id: `${door.id}:target`,
+      offset: boundary.clone().sub(basis.position).dot(basis.axis),
+      width: door.width,
+      height: door.height,
+    } satisfies WallOpening,
+  };
+}
+
+function getBuiltWallOpenings(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  doors: GalleryDoor[],
+  roomIndex: number,
+  wall: GalleryWall,
+) {
+  const target = builtWallTarget(roomIndex, wall);
+  const openings: WallOpening[] = doors
+    .filter((door) => door.wall === target)
+    .map((door) => ({
+      id: door.id,
+      offset: door.offset,
+      width: door.width,
+      height: door.height,
+    }));
+
+  doors.forEach((door) => {
+    if (door.roomIndex === roomIndex || door.connectsToRoomIndex !== roomIndex) {
+      return;
+    }
+
+    const connectedTarget = getConnectedRoomWallTarget(room, customWalls, door);
+    if (connectedTarget?.wall === target) {
+      openings.push(connectedTarget.opening);
+    }
+  });
+
+  return openings;
 }
 
 function getRoomIndexAtWorldX(room: GalleryRoomConfig, worldX: number) {
@@ -303,6 +438,7 @@ function PlayerMovement({
   const direction = useMemo(() => new THREE.Vector3(), []);
   const forward = useMemo(() => new THREE.Vector3(), []);
   const right = useMemo(() => new THREE.Vector3(), []);
+  const currentRoomIndexRef = useRef(0);
   const lastDoorTeleport = useRef(0);
 
   useEffect(() => {
@@ -403,24 +539,11 @@ function PlayerMovement({
       isGrounded.current = true;
     }
 
-    const firstRoom = getRoomDimensions(room, 0);
-    const lastRoom = getRoomDimensions(room, room.roomCount - 1);
-    camera.position.x = THREE.MathUtils.clamp(
-      camera.position.x,
-      -firstRoom.width / 2 + 1.25,
-      roomOffset(room, room.roomCount - 1) + lastRoom.width / 2 - 1.25,
-    );
-    const currentRoomIndex = getRoomIndexAtWorldX(room, camera.position.x);
-    const currentRoom = getRoomDimensions(room, currentRoomIndex);
-    const currentCenter = getRoomCenter(room, currentRoomIndex);
-    camera.position.z = THREE.MathUtils.clamp(
-      camera.position.z,
-      currentCenter.z - currentRoom.depth / 2 + 1.25,
-      currentCenter.z + currentRoom.depth / 2 - 1.25,
-    );
-
+    currentRoomIndexRef.current = clamp(currentRoomIndexRef.current, 0, room.roomCount - 1);
+    let currentRoomIndex = currentRoomIndexRef.current;
     const now = performance.now();
-    if (now - lastDoorTeleport.current > 1200) {
+
+    if (now - lastDoorTeleport.current > 850) {
       for (const door of doors) {
         if (!door.isOpen || door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
           continue;
@@ -430,33 +553,57 @@ function PlayerMovement({
         if (!doorPoint) {
           continue;
         }
-        const targetCenter = getRoomCenter(room, door.connectsToRoomIndex);
-        const sourceDistance = Math.hypot(
-          camera.position.x - doorPoint.x,
-          camera.position.z - doorPoint.z,
-        );
-        const targetDistance = Math.hypot(
-          camera.position.x - targetCenter.x,
-          camera.position.z - targetCenter.z,
-        );
-        const threshold = Math.max(1.1, door.width * 0.72);
 
-        if (door.roomIndex === currentRoomIndex && sourceDistance <= threshold) {
-          camera.position.set(targetCenter.x, eyeHeight, targetCenter.z);
-          lastDoorTeleport.current = now;
-          keys.current.clear();
-          break;
+        const targetEntry = getRoomBoundaryEntryPoint(room, door.connectsToRoomIndex, doorPoint);
+        const sourceEntry = getDoorInnerPoint(room, customWalls, door);
+        const threshold = Math.max(1.05, door.width * 0.64);
+
+        if (door.roomIndex === currentRoomIndex && sourceEntry) {
+          const sourceDistance = Math.hypot(
+            camera.position.x - sourceEntry.x,
+            camera.position.z - sourceEntry.z,
+          );
+
+          if (sourceDistance <= threshold) {
+            camera.position.set(targetEntry.inside.x, eyeHeight, targetEntry.inside.z);
+            currentRoomIndexRef.current = door.connectsToRoomIndex;
+            currentRoomIndex = door.connectsToRoomIndex;
+            lastDoorTeleport.current = now;
+            keys.current.clear();
+            break;
+          }
         }
 
-        if (door.connectsToRoomIndex === currentRoomIndex && targetDistance <= threshold) {
-          const sourceCenter = getRoomCenter(room, door.roomIndex);
-          camera.position.set(sourceCenter.x, eyeHeight, sourceCenter.z);
-          lastDoorTeleport.current = now;
-          keys.current.clear();
-          break;
+        if (door.connectsToRoomIndex === currentRoomIndex) {
+          const targetDistance = Math.hypot(
+            camera.position.x - targetEntry.inside.x,
+            camera.position.z - targetEntry.inside.z,
+          );
+
+          if (targetDistance <= threshold && sourceEntry) {
+            camera.position.set(sourceEntry.x, eyeHeight, sourceEntry.z);
+            currentRoomIndexRef.current = door.roomIndex;
+            currentRoomIndex = door.roomIndex;
+            lastDoorTeleport.current = now;
+            keys.current.clear();
+            break;
+          }
         }
       }
     }
+
+    const currentRoom = getRoomDimensions(room, currentRoomIndex);
+    const currentCenter = getRoomCenter(room, currentRoomIndex);
+    camera.position.x = THREE.MathUtils.clamp(
+      camera.position.x,
+      currentCenter.x - currentRoom.width / 2 + 1.25,
+      currentCenter.x + currentRoom.width / 2 - 1.25,
+    );
+    camera.position.z = THREE.MathUtils.clamp(
+      camera.position.z,
+      currentCenter.z - currentRoom.depth / 2 + 1.25,
+      currentCenter.z + currentRoom.depth / 2 - 1.25,
+    );
   });
 
   return null;
@@ -855,6 +1002,7 @@ function getGalleryBounds(room: GalleryRoomConfig) {
 function Room({
   room,
   roomIndex,
+  customWalls,
   isEditMode,
   isSelected,
   editorViewMode,
@@ -867,6 +1015,7 @@ function Room({
 }: {
   room: GalleryRoomConfig;
   roomIndex: number;
+  customWalls: GalleryCustomWall[];
   isEditMode: boolean;
   isSelected: boolean;
   editorViewMode: EditorViewMode;
@@ -973,7 +1122,7 @@ function Room({
         height={dimensions.height}
         position={[0, dimensions.height / 2, -dimensions.depth / 2]}
         onClick={(event) => placeOnWall("north", event)}
-        openings={doors.filter((door) => door.wall === builtWallTarget(roomIndex, "north"))}
+        openings={getBuiltWallOpenings(room, customWalls, doors, roomIndex, "north")}
         editableTarget={{
           kind: "builtWall",
           wall: builtWallTarget(roomIndex, "north"),
@@ -987,7 +1136,7 @@ function Room({
         position={[0, dimensions.height / 2, dimensions.depth / 2]}
         rotation={[0, Math.PI, 0]}
         onClick={(event) => placeOnWall("south", event)}
-        openings={doors.filter((door) => door.wall === builtWallTarget(roomIndex, "south"))}
+        openings={getBuiltWallOpenings(room, customWalls, doors, roomIndex, "south")}
         editableTarget={{
           kind: "builtWall",
           wall: builtWallTarget(roomIndex, "south"),
@@ -1001,7 +1150,7 @@ function Room({
         position={[-dimensions.width / 2, dimensions.height / 2, 0]}
         rotation={[0, Math.PI / 2, 0]}
         onClick={(event) => placeOnWall("west", event)}
-        openings={doors.filter((door) => door.wall === builtWallTarget(roomIndex, "west"))}
+        openings={getBuiltWallOpenings(room, customWalls, doors, roomIndex, "west")}
         editableTarget={{
           kind: "builtWall",
           wall: builtWallTarget(roomIndex, "west"),
@@ -1015,7 +1164,7 @@ function Room({
         position={[dimensions.width / 2, dimensions.height / 2, 0]}
         rotation={[0, -Math.PI / 2, 0]}
         onClick={(event) => placeOnWall("east", event)}
-        openings={doors.filter((door) => door.wall === builtWallTarget(roomIndex, "east"))}
+        openings={getBuiltWallOpenings(room, customWalls, doors, roomIndex, "east")}
         editableTarget={{
           kind: "builtWall",
           wall: builtWallTarget(roomIndex, "east"),
@@ -1664,15 +1813,15 @@ function Wall({
   rotation?: [number, number, number];
   onClick?: (event: ThreeEvent<MouseEvent>) => void;
   editableTarget?: EditableHitTarget;
-  openings?: GalleryDoor[];
+  openings?: WallOpening[];
 }) {
   const wallPieces = useMemo(() => {
     const sortedOpenings = openings
-      .map((door) => ({
-        start: clamp(door.offset - door.width / 2 - 0.08, -length / 2, length / 2),
-        end: clamp(door.offset + door.width / 2 + 0.08, -length / 2, length / 2),
-        offset: door.offset,
-        height: clamp(door.height + 0.12, 1.2, height - 0.18),
+      .map((opening) => ({
+        start: clamp(opening.offset - opening.width / 2 - 0.08, -length / 2, length / 2),
+        end: clamp(opening.offset + opening.width / 2 + 0.08, -length / 2, length / 2),
+        offset: opening.offset,
+        height: clamp(opening.height + 0.12, 1.2, height - 0.18),
       }))
       .filter((opening) => opening.end > opening.start + 0.1)
       .sort((a, b) => a.start - b.start);
@@ -1726,12 +1875,13 @@ function Wall({
           <mesh
             key={piece.key}
             position={[piece.x, piece.y, 0]}
+            castShadow
             receiveShadow
             onClick={onClick}
             userData={editableTarget ? { editableTarget } : undefined}
           >
-            <planeGeometry args={[piece.width, piece.height]} />
-            <meshStandardMaterial color="#e7e1d3" roughness={0.88} />
+            <boxGeometry args={[piece.width, piece.height, 0.18]} />
+            <meshStandardMaterial color="#e7e1d3" roughness={0.88} side={THREE.DoubleSide} />
           </mesh>
         ))}
       </group>
@@ -1742,12 +1892,13 @@ function Wall({
     <mesh
       position={position}
       rotation={rotation}
+      castShadow
       receiveShadow
       onClick={onClick}
       userData={editableTarget ? { editableTarget } : undefined}
     >
-      <planeGeometry args={[length, height]} />
-      <meshStandardMaterial color="#e7e1d3" roughness={0.88} />
+      <boxGeometry args={[length, height, 0.18]} />
+      <meshStandardMaterial color="#e7e1d3" roughness={0.88} side={THREE.DoubleSide} />
     </mesh>
   );
 }
@@ -1920,7 +2071,7 @@ function Door({
     ? null
     : customWalls.find((wall) => wall.id === door.wall) ?? null;
   const mount = builtWall
-    ? getWallMount(room, builtWall.wall, builtWall.roomIndex)
+    ? getWallMount(room, builtWall.wall, builtWall.roomIndex, 0)
     : customWall
       ? getCustomWallMount(room, customWall)
       : null;
@@ -1934,9 +2085,13 @@ function Door({
     id: door.id,
     label: door.name,
   };
-  const wallBasis = getWallBasis(room, door.wall, customWalls);
+  const wallBasis = getWallBasis(room, door.wall, customWalls, 0);
   const dragPoint = useMemo(() => new THREE.Vector3(), []);
   const isDragging = useRef(false);
+  const frameThickness = 0.16;
+  const frameDepth = 0.24;
+  const leafWidth = Math.max(0.3, door.width - 0.1);
+  const leafHeight = Math.max(0.8, door.height - 0.1);
 
   function startDrag(event: ThreeEvent<PointerEvent>) {
     if (!isEditMode || editorViewMode !== "topdown" || transformTool !== "move" || !wallBasis) {
@@ -1996,15 +2151,25 @@ function Door({
 
   return (
     <group position={mount.position} rotation={mount.rotation}>
-      <group position={[door.offset, door.height / 2, 0.14]}>
-        {isSelected ? (
-          <mesh position={[0, 0, -0.018]}>
-            <boxGeometry args={[door.width + 0.36, door.height + 0.28, 0.12]} />
-            <meshBasicMaterial color="#f6c453" transparent opacity={0.44} />
-          </mesh>
+      <group position={[door.offset, door.height / 2, 0]}>
+        {isSelected && isEditMode ? (
+          <group>
+            <mesh position={[-door.width / 2 - 0.12, 0, 0.02]}>
+              <boxGeometry args={[0.08, door.height + 0.32, 0.3]} />
+              <meshBasicMaterial color="#f6c453" transparent opacity={0.55} />
+            </mesh>
+            <mesh position={[door.width / 2 + 0.12, 0, 0.02]}>
+              <boxGeometry args={[0.08, door.height + 0.32, 0.3]} />
+              <meshBasicMaterial color="#f6c453" transparent opacity={0.55} />
+            </mesh>
+            <mesh position={[0, door.height / 2 + 0.15, 0.02]}>
+              <boxGeometry args={[door.width + 0.4, 0.08, 0.3]} />
+              <meshBasicMaterial color="#f6c453" transparent opacity={0.55} />
+            </mesh>
+          </group>
         ) : null}
         <mesh
-          position={[0, 0, -0.02]}
+          position={[-door.width / 2 - frameThickness / 2, 0, 0]}
           onClick={handleClick}
           onPointerDown={startDrag}
           onPointerMove={drag}
@@ -2012,11 +2177,11 @@ function Door({
           onPointerCancel={stopDrag}
           userData={{ editableTarget }}
         >
-          <boxGeometry args={[door.width + 0.24, door.height + 0.18, 0.14]} />
-          <meshStandardMaterial color="#2d251e" roughness={0.7} />
+          <boxGeometry args={[frameThickness, door.height + frameThickness, frameDepth]} />
+          <meshStandardMaterial color="#6d5946" roughness={0.68} />
         </mesh>
         <mesh
-          position={[0, 0, 0.045]}
+          position={[door.width / 2 + frameThickness / 2, 0, 0]}
           onClick={handleClick}
           onPointerDown={startDrag}
           onPointerMove={drag}
@@ -2024,19 +2189,48 @@ function Door({
           onPointerCancel={stopDrag}
           userData={{ editableTarget }}
         >
-          <boxGeometry args={[door.width, door.height, 0.09]} />
-          <meshStandardMaterial color="#0f0d0b" roughness={0.9} />
+          <boxGeometry args={[frameThickness, door.height + frameThickness, frameDepth]} />
+          <meshStandardMaterial color="#6d5946" roughness={0.68} />
+        </mesh>
+        <mesh
+          position={[0, door.height / 2 + frameThickness / 2, 0]}
+          onClick={handleClick}
+          onPointerDown={startDrag}
+          onPointerMove={drag}
+          onPointerUp={stopDrag}
+          onPointerCancel={stopDrag}
+          userData={{ editableTarget }}
+        >
+          <boxGeometry args={[door.width + frameThickness * 2, frameThickness, frameDepth]} />
+          <meshStandardMaterial color="#78634f" roughness={0.66} />
+        </mesh>
+        <mesh
+          position={[0, -door.height / 2 + 0.04, 0.01]}
+          onClick={handleClick}
+          onPointerDown={startDrag}
+          onPointerMove={drag}
+          onPointerUp={stopDrag}
+          onPointerCancel={stopDrag}
+          userData={{ editableTarget }}
+        >
+          <boxGeometry args={[door.width + frameThickness * 1.6, 0.08, frameDepth]} />
+          <meshStandardMaterial color="#8b765f" roughness={0.72} />
         </mesh>
         <group
-          position={[-door.width / 2, 0, 0.11]}
+          position={[-door.width / 2, 0, 0.08]}
           rotation={[0, door.isOpen ? -Math.PI * 0.68 : 0, 0]}
         >
-          <mesh position={[door.width / 2, 0, 0]} onClick={handleClick} userData={{ editableTarget }}>
-            <boxGeometry args={[door.width, door.height, 0.1]} />
+          <mesh
+            position={[leafWidth / 2 + 0.05, -0.01, 0]}
+            castShadow
+            onClick={handleClick}
+            userData={{ editableTarget }}
+          >
+            <boxGeometry args={[leafWidth, leafHeight, 0.1]} />
             <meshStandardMaterial color="#594638" roughness={0.6} metalness={0.04} />
           </mesh>
           <mesh
-            position={[door.width * 0.84, 0.03, 0.07]}
+            position={[door.width * 0.82, 0.02, 0.08]}
             onClick={handleClick}
             userData={{ editableTarget }}
           >
@@ -2044,13 +2238,9 @@ function Door({
             <meshStandardMaterial color="#d2b56d" roughness={0.38} metalness={0.42} />
           </mesh>
         </group>
-        <mesh position={[0, door.height / 2 + 0.06, 0.08]}>
-          <boxGeometry args={[door.width + 0.42, 0.12, 0.18]} />
-          <meshStandardMaterial color="#7a6754" roughness={0.65} />
-        </mesh>
         {isEditMode && editorViewMode === "topdown" ? (
           <mesh
-            position={[0, -door.height / 2 + 0.08, 0.18]}
+            position={[0, -door.height / 2 + 0.08, 0.2]}
             onClick={handleClick}
             onPointerDown={startDrag}
             onPointerMove={drag}
@@ -2092,8 +2282,8 @@ function DoorConnections({
           return null;
         }
 
-        const targetCenter = getRoomCenter(room, door.connectsToRoomIndex);
-        const end = new THREE.Vector3(targetCenter.x, 0, targetCenter.z);
+        const targetEntry = getRoomBoundaryEntryPoint(room, door.connectsToRoomIndex, start, 0.85);
+        const end = targetEntry.boundary;
         const delta = end.clone().sub(new THREE.Vector3(start.x, 0, start.z));
         const length = delta.length();
 
@@ -2113,6 +2303,15 @@ function DoorConnections({
                 roughness={0.82}
                 transparent
                 opacity={door.isOpen ? 0.9 : 0.34}
+              />
+            </mesh>
+            <mesh position={[0, 0.055, length / 2]}>
+              <boxGeometry args={[Math.max(door.width + 0.36, 1.5), 0.08, 0.28]} />
+              <meshStandardMaterial
+                color={door.isOpen ? "#d4b46b" : "#423932"}
+                roughness={0.72}
+                transparent
+                opacity={door.isOpen ? 0.62 : 0.28}
               />
             </mesh>
           </group>
@@ -2308,6 +2507,7 @@ export default function GalleryScene({
           key={roomIndex}
           room={roomConfig}
           roomIndex={roomIndex}
+          customWalls={customWalls}
           isEditMode={isEditMode}
           isSelected={selectedRoomIndex === roomIndex}
           editorViewMode={editorViewMode}
@@ -2356,7 +2556,7 @@ export default function GalleryScene({
           room={roomConfig}
           customWalls={customWalls}
           isEditMode={isEditMode}
-          isSelected={selectedDoorId === door.id}
+          isSelected={isEditMode && selectedDoorId === door.id}
           editorViewMode={editorViewMode}
           transformTool={transformTool}
           onSelectDoor={onSelectDoor}
