@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type {
   AppMode,
+  EditorSettings,
   EditorTransformTool,
   EditorViewMode,
   GalleryCustomWall,
@@ -24,6 +25,7 @@ interface GallerySceneProps {
   mode: AppMode;
   editorViewMode: EditorViewMode;
   transformTool: EditorTransformTool;
+  editorSettings: EditorSettings;
   pendingPlacementImageId: string | null;
   selectedImageId: string | null;
   selectedWallId: string | null;
@@ -177,7 +179,7 @@ export function getDefaultLayout(
   };
 }
 
-function PlayerMovement({ room }: { room: GalleryRoomConfig }) {
+function PlayerMovement({ room, settings }: { room: GalleryRoomConfig; settings: EditorSettings }) {
   const { camera, gl } = useThree();
   const keys = useRef(new Set<string>());
   const verticalVelocity = useRef(0);
@@ -208,7 +210,7 @@ function PlayerMovement({ room }: { room: GalleryRoomConfig }) {
       keys.current.add(event.code);
 
       if (event.code === "Space" && isGrounded.current) {
-        verticalVelocity.current = 5.4;
+        verticalVelocity.current = settings.jumpPower;
         isGrounded.current = false;
       }
     };
@@ -236,7 +238,7 @@ function PlayerMovement({ room }: { room: GalleryRoomConfig }) {
       window.removeEventListener("blur", clearMovement);
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
-  }, [camera, gl]);
+  }, [camera, gl, settings.jumpPower]);
 
   useFrame((_, delta) => {
     direction.set(0, 0, 0);
@@ -255,7 +257,10 @@ function PlayerMovement({ room }: { room: GalleryRoomConfig }) {
     }
 
     if (direction.lengthSq() > 0) {
-      const speed = keys.current.has("ShiftLeft") || keys.current.has("ShiftRight") ? 7.1 : 4.2;
+      const speed =
+        keys.current.has("ShiftLeft") || keys.current.has("ShiftRight")
+          ? settings.sprintSpeed
+          : settings.walkSpeed;
 
       direction.normalize();
       camera.getWorldDirection(forward);
@@ -297,7 +302,13 @@ function PlayerMovement({ room }: { room: GalleryRoomConfig }) {
   return null;
 }
 
-function FirstPersonLookControls({ mode }: { mode: AppMode }) {
+function FirstPersonLookControls({
+  mode,
+  mouseSensitivity,
+}: {
+  mode: AppMode;
+  mouseSensitivity: number;
+}) {
   const { camera, gl } = useThree();
   const yaw = useRef(0);
   const pitch = useRef(0);
@@ -310,7 +321,7 @@ function FirstPersonLookControls({ mode }: { mode: AppMode }) {
 
   useEffect(() => {
     const canvas = gl.domElement;
-    const sensitivity = 0.0024;
+    const sensitivity = mouseSensitivity;
 
     const applyRotation = () => {
       camera.rotation.order = "YXZ";
@@ -362,7 +373,7 @@ function FirstPersonLookControls({ mode }: { mode: AppMode }) {
       document.removeEventListener("pointerdown", onDocumentPointerDown);
       document.removeEventListener("mousemove", onMouseMove);
     };
-  }, [camera, gl, mode]);
+  }, [camera, gl, mode, mouseSensitivity]);
 
   return null;
 }
@@ -1244,6 +1255,7 @@ export default function GalleryScene({
   mode,
   editorViewMode,
   transformTool,
+  editorSettings,
   pendingPlacementImageId,
   selectedImageId,
   selectedWallId,
@@ -1354,8 +1366,11 @@ export default function GalleryScene({
         <EditorCameraControls room={roomConfig} />
       ) : (
         <>
-          <FirstPersonLookControls mode={mode} />
-          <PlayerMovement room={roomConfig} />
+          <FirstPersonLookControls
+            mode={mode}
+            mouseSensitivity={editorSettings.mouseSensitivity}
+          />
+          <PlayerMovement room={roomConfig} settings={editorSettings} />
           {isEditMode ? (
             <FirstPersonAimFollower
               room={roomConfig}

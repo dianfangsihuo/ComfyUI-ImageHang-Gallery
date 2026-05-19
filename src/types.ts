@@ -2,6 +2,20 @@ export type GalleryImageSource = "local" | "supabase" | "sample";
 export type AppMode = "view" | "edit";
 export type EditorViewMode = "topdown" | "firstPerson";
 export type EditorTransformTool = "move" | "rotate" | "scale";
+export type EditorShortcutAction =
+  | "toggleView"
+  | "moveTool"
+  | "rotateTool"
+  | "scaleTool"
+  | "nudgeLeft"
+  | "nudgeRight"
+  | "nudgeForward"
+  | "nudgeBackward"
+  | "rotateLeft"
+  | "rotateRight"
+  | "scaleUp"
+  | "scaleDown"
+  | "deleteSelection";
 export type GalleryWall = "north" | "south" | "west" | "east";
 export type GalleryWallTarget = GalleryWall | string;
 
@@ -55,4 +69,12 @@ export interface GalleryDoor {
   offset: number;
   width: number;
   height: number;
+}
+
+export interface EditorSettings {
+  shortcuts: Record<EditorShortcutAction, string>;
+  mouseSensitivity: number;
+  walkSpeed: number;
+  sprintSpeed: number;
+  jumpPower: number;
 }

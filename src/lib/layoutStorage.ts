@@ -1,9 +1,16 @@
-import type { GalleryCustomWall, GalleryDoor, GalleryLayouts, GalleryRoomConfig } from "../types";
+import type {
+  EditorSettings,
+  GalleryCustomWall,
+  GalleryDoor,
+  GalleryLayouts,
+  GalleryRoomConfig,
+} from "../types";
 
 const LAYOUT_STORAGE_KEY = "image-hang.gallery-layouts";
 const ROOM_STORAGE_KEY = "image-hang.room-config";
 const WALL_STORAGE_KEY = "image-hang.custom-walls";
 const DOOR_STORAGE_KEY = "image-hang.doors";
+const SETTINGS_STORAGE_KEY = "image-hang.editor-settings";
 
 export const defaultRoomConfig: GalleryRoomConfig = {
   width: 18,
@@ -11,6 +18,34 @@ export const defaultRoomConfig: GalleryRoomConfig = {
   height: 5.2,
   roomCount: 1,
 };
+
+export const defaultEditorSettings: EditorSettings = {
+  shortcuts: {
+    toggleView: "KeyV",
+    moveTool: "KeyG",
+    rotateTool: "KeyR",
+    scaleTool: "KeyS",
+    nudgeLeft: "KeyJ",
+    nudgeRight: "KeyL",
+    nudgeForward: "KeyI",
+    nudgeBackward: "KeyK",
+    rotateLeft: "KeyQ",
+    rotateRight: "KeyE",
+    scaleUp: "Equal",
+    scaleDown: "Minus",
+    deleteSelection: "Delete",
+  },
+  mouseSensitivity: 0.0024,
+  walkSpeed: 4.2,
+  sprintSpeed: 7.1,
+  jumpPower: 5.4,
+};
+
+function clampNumber(value: unknown, fallback: number, min: number, max: number) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(max, Math.max(min, value))
+    : fallback;
+}
 
 export function loadStoredLayouts(): GalleryLayouts {
   try {
@@ -92,4 +127,42 @@ export function saveStoredDoors(doors: GalleryDoor[]) {
 
 export function clearStoredDoors() {
   localStorage.removeItem(DOOR_STORAGE_KEY);
+}
+
+export function loadStoredEditorSettings(): EditorSettings {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+
+    if (!raw) {
+      return defaultEditorSettings;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<EditorSettings>;
+
+    return {
+      shortcuts: {
+        ...defaultEditorSettings.shortcuts,
+        ...(parsed.shortcuts ?? {}),
+      },
+      mouseSensitivity: clampNumber(
+        parsed.mouseSensitivity,
+        defaultEditorSettings.mouseSensitivity,
+        0.0008,
+        0.006,
+      ),
+      walkSpeed: clampNumber(parsed.walkSpeed, defaultEditorSettings.walkSpeed, 1.5, 9),
+      sprintSpeed: clampNumber(parsed.sprintSpeed, defaultEditorSettings.sprintSpeed, 2.5, 14),
+      jumpPower: clampNumber(parsed.jumpPower, defaultEditorSettings.jumpPower, 2.5, 9),
+    };
+  } catch {
+    return defaultEditorSettings;
+  }
+}
+
+export function saveStoredEditorSettings(settings: EditorSettings) {
+  localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+}
+
+export function clearStoredEditorSettings() {
+  localStorage.removeItem(SETTINGS_STORAGE_KEY);
 }

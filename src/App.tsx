@@ -27,19 +27,25 @@ import {
   clearStoredRoomConfig,
   clearStoredCustomWalls,
   clearStoredDoors,
+  clearStoredEditorSettings,
+  defaultEditorSettings,
   defaultRoomConfig,
   loadStoredCustomWalls,
   loadStoredDoors,
+  loadStoredEditorSettings,
   loadStoredLayouts,
   loadStoredRoomConfig,
   saveStoredCustomWalls,
   saveStoredDoors,
+  saveStoredEditorSettings,
   saveStoredLayouts,
   saveStoredRoomConfig,
 } from "./lib/layoutStorage";
 import { createSampleImages } from "./lib/sampleArt";
 import type {
   AppMode,
+  EditorSettings,
+  EditorShortcutAction,
   EditorTransformTool,
   EditorViewMode,
   GalleryCustomWall,
@@ -57,6 +63,24 @@ type EditableSelection =
   | { type: "wall"; id: string }
   | { type: "door"; id: string }
   | { type: "room"; roomIndex: number };
+
+const shortcutLabels: Record<EditorShortcutAction, string> = {
+  toggleView: "切换视角",
+  moveTool: "移动工具",
+  rotateTool: "旋转工具",
+  scaleTool: "缩放工具",
+  nudgeLeft: "向左/降低偏移",
+  nudgeRight: "向右/提高偏移",
+  nudgeForward: "向前/升高",
+  nudgeBackward: "向后/降低",
+  rotateLeft: "逆时针旋转",
+  rotateRight: "顺时针旋转",
+  scaleUp: "放大",
+  scaleDown: "缩小",
+  deleteSelection: "删除选中",
+};
+
+const shortcutOrder = Object.keys(shortcutLabels) as EditorShortcutAction[];
 
 const wallLabels: Record<GalleryWall, string> = {
   north: "前墙",
@@ -127,6 +151,40 @@ function getDefaultFrameWidth(image: GalleryImage) {
   return Math.min(3.4, Math.max(2.15, aspect * 2.15));
 }
 
+function formatKeyCode(code: string) {
+  if (code.startsWith("Key")) {
+    return code.slice(3);
+  }
+
+  if (code.startsWith("Digit")) {
+    return code.slice(5);
+  }
+
+  if (code.startsWith("Numpad")) {
+    return `Num ${code.slice(6)}`;
+  }
+
+  const labels: Record<string, string> = {
+    Equal: "+",
+    Minus: "-",
+    Space: "Space",
+    Delete: "Del",
+    Backspace: "Backspace",
+    ArrowUp: "↑",
+    ArrowDown: "↓",
+    ArrowLeft: "←",
+    ArrowRight: "→",
+    ShiftLeft: "L Shift",
+    ShiftRight: "R Shift",
+  };
+
+  return labels[code] ?? code;
+}
+
+function clampSetting(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
 function calculateGalleryCapacity(
   room: GalleryRoomConfig,
   customWalls: GalleryCustomWall[],
@@ -180,6 +238,11 @@ function App() {
   const [selectedRoomIndex, setSelectedRoomIndex] = useState(0);
   const [selectedObject, setSelectedObject] = useState<EditableSelection | null>(null);
   const [transformTool, setTransformTool] = useState<EditorTransformTool>("move");
+  const [editorSettings, setEditorSettings] = useState<EditorSettings>(() =>
+    loadStoredEditorSettings(),
+  );
+  const [capturingShortcut, setCapturingShortcut] = useState<EditorShortcutAction | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
   const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("topdown");
@@ -295,6 +358,10 @@ function App() {
   }, [doors]);
 
   useEffect(() => {
+    saveStoredEditorSettings(editorSettings);
+  }, [editorSettings]);
+
+  useEffect(() => {
     setSelectedRoomIndex((current) => clamp(Math.round(current), 0, roomConfig.roomCount - 1));
   }, [roomConfig.roomCount]);
 
@@ -373,6 +440,7 @@ function App() {
     clearStoredRoomConfig();
     clearStoredCustomWalls();
     clearStoredDoors();
+    clearStoredEditorSettings();
     previousImages.forEach(revokeImageUrl);
     setImages([]);
     setLayouts({});
@@ -385,6 +453,8 @@ function App() {
     setSelectedDoorId(null);
     setSelectedRoomIndex(0);
     setSelectedObject(null);
+    setEditorSettings(defaultEditorSettings);
+    setCapturingShortcut(null);
     setMessage("已恢复示例画廊");
   }
 
@@ -777,6 +847,26 @@ function App() {
     }
   }
 
+  function updateEditorSetting<K extends keyof EditorSettings>(
+    key: K,
+    value: EditorSettings[K],
+  ) {
+    setEditorSettings((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
+
+  function bindShortcut(action: EditorShortcutAction, code: string) {
+    setEditorSettings((current) => ({
+      ...current,
+      shortcuts: {
+        ...current.shortcuts,
+        [action]: code,
+      },
+    }));
+  }
+
   function placePendingImage(wall: GalleryWallTarget, offset: number, height: number) {
     const imageId = pendingPlacementIds[0];
 
@@ -816,6 +906,18 @@ function App() {
     }
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (capturingShortcut) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+
+        if (event.code !== "Escape") {
+          bindShortcut(capturingShortcut, event.code);
+        }
+
+        setCapturingShortcut(null);
+        return;
+      }
+
       const target = event.target instanceof Element ? event.target : null;
       const isTyping = Boolean(target?.closest("input, textarea, select"));
       const isPointerLocked = document.pointerLockElement !== null;
@@ -824,93 +926,79 @@ function App() {
         return;
       }
 
-      const handledKeys = new Set([
-        "KeyG",
-        "KeyR",
-        "KeyS",
-        "KeyV",
-        "KeyQ",
-        "KeyE",
-        "KeyI",
-        "KeyK",
-        "KeyJ",
-        "KeyL",
-        "Equal",
-        "NumpadAdd",
-        "Minus",
-        "NumpadSubtract",
-        "Delete",
-        "Backspace",
-      ]);
+      const shortcutEntry = Object.entries(editorSettings.shortcuts).find(
+        ([, code]) => code === event.code,
+      ) as [EditorShortcutAction, string] | undefined;
 
-      if (!handledKeys.has(event.code)) {
+      if (!shortcutEntry) {
         return;
       }
 
+      const action = shortcutEntry[0];
       event.preventDefault();
       event.stopImmediatePropagation();
 
-      if (event.code === "KeyG") {
+      if (action === "moveTool") {
         setTransformTool("move");
         return;
       }
 
-      if (event.code === "KeyR") {
+      if (action === "rotateTool") {
         setTransformTool("rotate");
         return;
       }
 
-      if (event.code === "KeyS") {
+      if (action === "scaleTool") {
         setTransformTool("scale");
         return;
       }
 
-      if (event.code === "KeyV") {
+      if (action === "toggleView") {
         setEditorViewMode((current) => (current === "topdown" ? "firstPerson" : "topdown"));
         return;
       }
 
-      if (event.code === "Delete" || event.code === "Backspace") {
+      if (action === "deleteSelection") {
         deleteSelectedObject();
         return;
       }
 
-      if (event.code === "KeyQ") {
+      if (action === "rotateLeft") {
         rotateSelectedObject(-0.08);
         return;
       }
 
-      if (event.code === "KeyE") {
+      if (action === "rotateRight") {
         rotateSelectedObject(0.08);
         return;
       }
 
-      if (event.code === "KeyJ") {
+      if (action === "nudgeLeft") {
         nudgeSelectedObject("x", -0.2);
         return;
       }
 
-      if (event.code === "KeyL") {
+      if (action === "nudgeRight") {
         nudgeSelectedObject("x", 0.2);
         return;
       }
 
-      if (event.code === "KeyI") {
+      if (action === "nudgeForward") {
         nudgeSelectedObject(selectedObject?.type === "wall" || selectedObject?.type === "room" ? "z" : "height", 0.2);
         return;
       }
 
-      if (event.code === "KeyK") {
+      if (action === "nudgeBackward") {
         nudgeSelectedObject(selectedObject?.type === "wall" || selectedObject?.type === "room" ? "z" : "height", -0.2);
         return;
       }
 
-      if (event.code === "Equal" || event.code === "NumpadAdd") {
+      if (action === "scaleUp") {
         scaleSelectedObject(0.2);
         return;
       }
 
-      if (event.code === "Minus" || event.code === "NumpadSubtract") {
+      if (action === "scaleDown") {
         scaleSelectedObject(-0.2);
       }
     };
@@ -928,6 +1016,8 @@ function App() {
     selectedWall,
     roomConfig,
     selectedRoomIndex,
+    editorSettings.shortcuts,
+    capturingShortcut,
   ]);
 
   return (
@@ -942,6 +1032,7 @@ function App() {
           mode={mode}
           editorViewMode={editorViewMode}
           transformTool={transformTool}
+          editorSettings={editorSettings}
           pendingPlacementImageId={pendingPlacementIds[0] ?? null}
           selectedImageId={selectedImageId}
           selectedWallId={selectedWallId}
@@ -1112,15 +1203,15 @@ function App() {
               <strong>从组件市场添加房间、墙壁、门，再选择对象调整参数</strong>
             </div>
             <div className="shortcut-grid" aria-label="Editor shortcuts">
-              <span><kbd>V</kbd> 切换视角</span>
-              <span><kbd>G</kbd> 移动</span>
-              <span><kbd>R</kbd> 旋转</span>
-              <span><kbd>S</kbd> 缩放</span>
-              <span><kbd>J</kbd><kbd>L</kbd> 左右移动</span>
-              <span><kbd>I</kbd><kbd>K</kbd> 前后/高度</span>
-              <span><kbd>Q</kbd><kbd>E</kbd> 旋转墙壁</span>
-              <span><kbd>+</kbd><kbd>-</kbd> 缩放</span>
-              <span><kbd>Del</kbd> 删除</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.toggleView)}</kbd> 切换视角</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.moveTool)}</kbd> 移动</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.rotateTool)}</kbd> 旋转</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.scaleTool)}</kbd> 缩放</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.nudgeLeft)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.nudgeRight)}</kbd> 左右移动</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.nudgeForward)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.nudgeBackward)}</kbd> 前后/高度</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.rotateLeft)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.rotateRight)}</kbd> 旋转墙壁</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.scaleUp)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.scaleDown)}</kbd> 缩放</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.deleteSelection)}</kbd> 删除</span>
             </div>
           </section>
         ) : null}
@@ -1504,6 +1595,127 @@ function App() {
                   <span>删除选中门</span>
                 </button>
               </div>
+            ) : null}
+          </section>
+        ) : null}
+
+        {mode === "edit" ? (
+          <section className="editor-panel settings-panel" aria-label="Editor settings">
+            <div className="editor-heading">
+              <Pencil size={17} />
+              <span>设置</span>
+            </div>
+
+            <button
+              type="button"
+              className="tool-button secondary"
+              onClick={() => setIsSettingsOpen((current) => !current)}
+            >
+              <span>{isSettingsOpen ? "收起设置" : "打开设置"}</span>
+            </button>
+
+            {isSettingsOpen ? (
+              <>
+                <div className="settings-group">
+                  <strong>数值</strong>
+                  <label className="field">
+                    <span>鼠标灵敏度 {(editorSettings.mouseSensitivity * 1000).toFixed(1)}</span>
+                    <input
+                      type="range"
+                      min="0.8"
+                      max="6"
+                      step="0.1"
+                      value={editorSettings.mouseSensitivity * 1000}
+                      onChange={(event) =>
+                        updateEditorSetting(
+                          "mouseSensitivity",
+                          clampSetting(Number(event.target.value) / 1000, 0.0008, 0.006),
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>行走速度 {editorSettings.walkSpeed.toFixed(1)}</span>
+                    <input
+                      type="range"
+                      min="1.5"
+                      max="9"
+                      step="0.1"
+                      value={editorSettings.walkSpeed}
+                      onChange={(event) =>
+                        updateEditorSetting(
+                          "walkSpeed",
+                          clampSetting(Number(event.target.value), 1.5, 9),
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>疾跑速度 {editorSettings.sprintSpeed.toFixed(1)}</span>
+                    <input
+                      type="range"
+                      min="2.5"
+                      max="14"
+                      step="0.1"
+                      value={editorSettings.sprintSpeed}
+                      onChange={(event) =>
+                        updateEditorSetting(
+                          "sprintSpeed",
+                          clampSetting(Number(event.target.value), 2.5, 14),
+                        )
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>跳跃力度 {editorSettings.jumpPower.toFixed(1)}</span>
+                    <input
+                      type="range"
+                      min="2.5"
+                      max="9"
+                      step="0.1"
+                      value={editorSettings.jumpPower}
+                      onChange={(event) =>
+                        updateEditorSetting(
+                          "jumpPower",
+                          clampSetting(Number(event.target.value), 2.5, 9),
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="settings-group">
+                  <strong>快捷键</strong>
+                  <div className="shortcut-list">
+                    {shortcutOrder.map((action) => (
+                      <button
+                        key={action}
+                        type="button"
+                        className={`shortcut-bind ${capturingShortcut === action ? "recording" : ""}`}
+                        onClick={() => setCapturingShortcut(action)}
+                      >
+                        <span>{shortcutLabels[action]}</span>
+                        <kbd>
+                          {capturingShortcut === action
+                            ? "按键..."
+                            : formatKeyCode(editorSettings.shortcuts[action])}
+                        </kbd>
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="tool-button secondary"
+                    onClick={() => {
+                      setEditorSettings(defaultEditorSettings);
+                      setCapturingShortcut(null);
+                    }}
+                  >
+                    <RotateCcw size={17} />
+                    <span>恢复默认设置</span>
+                  </button>
+                </div>
+              </>
             ) : null}
           </section>
         ) : null}

@@ -680,6 +680,56 @@ kbd {
   font-weight: 900;
 }
 
+.settings-panel {
+  border-color: rgba(52, 73, 94, 0.18);
+  background:
+    linear-gradient(135deg, rgba(232, 239, 245, 0.72), rgba(255, 255, 255, 0.42)),
+    rgba(255, 255, 255, 0.42);
+}
+
+.settings-group {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-group > strong {
+  color: #211b15;
+  font-size: 0.88rem;
+}
+
+.shortcut-list {
+  display: grid;
+  gap: 8px;
+}
+
+.shortcut-bind {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border: 1px solid rgba(75, 62, 48, 0.14);
+  border-radius: 7px;
+  color: #2c241d;
+  background: #fbf7ef;
+  text-align: left;
+}
+
+.shortcut-bind span {
+  overflow: hidden;
+  color: #4f4438;
+  font-size: 0.8rem;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut-bind.recording {
+  border-color: rgba(246, 196, 83, 0.85);
+  background: #fff1c7;
+}
+
 .room-selector {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
