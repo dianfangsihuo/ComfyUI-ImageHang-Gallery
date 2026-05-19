@@ -26,6 +26,7 @@ interface GallerySceneProps {
   editorViewMode: EditorViewMode;
   transformTool: EditorTransformTool;
   editorSettings: EditorSettings;
+  isGrabActive: boolean;
   pendingPlacementImageId: string | null;
   selectedImageId: string | null;
   selectedWallId: string | null;
@@ -662,6 +663,7 @@ function SelectedWallDragSurface({
   onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
 }) {
   const isDragging = useRef(false);
+  const dragOffset = useRef(new THREE.Vector3());
   const centerX = roomOffset(room, room.roomCount - 1) / 2;
   const totalWidth = roomOffset(room, room.roomCount - 1) + room.width + 4;
 
@@ -669,8 +671,8 @@ function SelectedWallDragSurface({
     const roomX = roomOffset(room, wall.roomIndex);
 
     onUpdateCustomWall(wall.id, {
-      x: event.point.x - roomX,
-      z: event.point.z,
+      x: event.point.x - dragOffset.current.x - roomX,
+      z: event.point.z - dragOffset.current.z,
     });
   }
 
@@ -679,6 +681,11 @@ function SelectedWallDragSurface({
     isDragging.current = true;
     const target = event.target as HTMLElement;
     target.setPointerCapture?.(event.pointerId);
+    dragOffset.current.set(
+      event.point.x - (roomOffset(room, wall.roomIndex) + wall.x),
+      0,
+      event.point.z - wall.z,
+    );
     moveWall(event);
   }
 
@@ -732,6 +739,7 @@ function SelectedWallDomDrag({
   const hitPoint = useMemo(() => new THREE.Vector3(), []);
   const isDragging = useRef(false);
   const wallRef = useRef(wall);
+  const dragOffset = useRef(new THREE.Vector3());
 
   useEffect(() => {
     wallRef.current = wall;
@@ -740,13 +748,17 @@ function SelectedWallDomDrag({
   useEffect(() => {
     const canvas = gl.domElement;
 
-    function updateFromEvent(event: PointerEvent) {
+    function getHit(event: PointerEvent) {
       const rect = canvas.getBoundingClientRect();
       pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
 
-      if (!raycaster.ray.intersectPlane(floorPlane, hitPoint)) {
+      return raycaster.ray.intersectPlane(floorPlane, hitPoint);
+    }
+
+    function updateFromEvent(event: PointerEvent) {
+      if (!getHit(event)) {
         return;
       }
 
@@ -754,8 +766,8 @@ function SelectedWallDomDrag({
       const roomX = roomOffset(room, currentWall.roomIndex);
 
       onUpdateCustomWall(currentWall.id, {
-        x: hitPoint.x - roomX,
-        z: hitPoint.z,
+        x: hitPoint.x - dragOffset.current.x - roomX,
+        z: hitPoint.z - dragOffset.current.z,
       });
     }
 
@@ -767,6 +779,14 @@ function SelectedWallDomDrag({
       event.preventDefault();
       event.stopImmediatePropagation();
       isDragging.current = true;
+      if (getHit(event)) {
+        const currentWall = wallRef.current;
+        dragOffset.current.set(
+          hitPoint.x - (roomOffset(room, currentWall.roomIndex) + currentWall.x),
+          0,
+          hitPoint.z - currentWall.z,
+        );
+      }
       updateFromEvent(event);
     }
 
@@ -802,20 +822,26 @@ function SelectedWallDomDrag({
 function FirstPersonAimFollower({
   room,
   customWalls,
+  layouts,
+  doors,
   selectedImageId,
   selectedWallId,
   selectedDoorId,
   transformTool,
+  isGrabActive,
   onUpdateImageLayout,
   onUpdateCustomWall,
   onUpdateDoor,
 }: {
   room: GalleryRoomConfig;
   customWalls: GalleryCustomWall[];
+  layouts: GalleryLayouts;
+  doors: GalleryDoor[];
   selectedImageId: string | null;
   selectedWallId: string | null;
   selectedDoorId: string | null;
   transformTool: EditorTransformTool;
+  isGrabActive: boolean;
   onUpdateImageLayout: (id: string, patch: Partial<GalleryFrameLayout>) => void;
   onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
   onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
@@ -828,11 +854,15 @@ function FirstPersonAimFollower({
   const lastUpdate = useRef(0);
 
   useFrame((state) => {
-    if (transformTool !== "move" || document.pointerLockElement !== state.gl.domElement) {
+    if (
+      !isGrabActive ||
+      transformTool !== "move" ||
+      document.pointerLockElement !== state.gl.domElement
+    ) {
       return;
     }
 
-    if (state.clock.elapsedTime - lastUpdate.current < 0.035) {
+    if (state.clock.elapsedTime - lastUpdate.current < 0.025) {
       return;
     }
 
@@ -850,9 +880,16 @@ function FirstPersonAimFollower({
         return;
       }
 
+      const nextX = THREE.MathUtils.lerp(
+        wall.x,
+        hitPoint.x - roomOffset(room, wall.roomIndex),
+        0.18,
+      );
+      const nextZ = THREE.MathUtils.lerp(wall.z, hitPoint.z, 0.18);
+
       onUpdateCustomWall(selectedWallId, {
-        x: hitPoint.x - roomOffset(room, wall.roomIndex),
-        z: hitPoint.z,
+        x: nextX,
+        z: nextZ,
       });
       return;
     }
@@ -909,18 +946,26 @@ function FirstPersonAimFollower({
     }
 
     if (selectedImageId) {
+      const current = layouts[selectedImageId];
       onUpdateImageLayout(selectedImageId, {
         wall: bestHit.wall,
-        offset: bestHit.offset,
-        height: bestHit.height,
+        offset: current
+          ? THREE.MathUtils.lerp(current.offset, bestHit.offset, 0.22)
+          : bestHit.offset,
+        height: current
+          ? THREE.MathUtils.lerp(current.height, bestHit.height, 0.22)
+          : bestHit.height,
       });
       return;
     }
 
     if (selectedDoorId) {
+      const currentDoor = doors.find((door) => door.id === selectedDoorId);
       onUpdateDoor(selectedDoorId, {
         wall: bestHit.wall,
-        offset: bestHit.offset,
+        offset: currentDoor
+          ? THREE.MathUtils.lerp(currentDoor.offset, bestHit.offset, 0.22)
+          : bestHit.offset,
       });
     }
   });
@@ -1256,6 +1301,7 @@ export default function GalleryScene({
   editorViewMode,
   transformTool,
   editorSettings,
+  isGrabActive,
   pendingPlacementImageId,
   selectedImageId,
   selectedWallId,
@@ -1375,10 +1421,13 @@ export default function GalleryScene({
             <FirstPersonAimFollower
               room={roomConfig}
               customWalls={customWalls}
+              layouts={layouts}
+              doors={doors}
               selectedImageId={selectedImageId}
               selectedWallId={selectedWallId}
               selectedDoorId={selectedDoorId}
               transformTool={transformTool}
+              isGrabActive={isGrabActive}
               onUpdateImageLayout={onUpdateImageLayout}
               onUpdateCustomWall={onUpdateCustomWall}
               onUpdateDoor={onUpdateDoor}

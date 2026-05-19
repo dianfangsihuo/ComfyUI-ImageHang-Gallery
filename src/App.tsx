@@ -77,6 +77,7 @@ const shortcutLabels: Record<EditorShortcutAction, string> = {
   rotateRight: "顺时针旋转",
   scaleUp: "放大",
   scaleDown: "缩小",
+  grabSelection: "抓取/释放",
   deleteSelection: "删除选中",
 };
 
@@ -243,6 +244,7 @@ function App() {
   );
   const [capturingShortcut, setCapturingShortcut] = useState<EditorShortcutAction | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isGrabActive, setIsGrabActive] = useState(false);
   const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
   const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("topdown");
@@ -278,6 +280,7 @@ function App() {
       setSelectedWallId(null);
       setSelectedDoorId(null);
       setSelectedObject(null);
+      setIsGrabActive(false);
     }
   }
 
@@ -360,6 +363,16 @@ function App() {
   useEffect(() => {
     saveStoredEditorSettings(editorSettings);
   }, [editorSettings]);
+
+  useEffect(() => {
+    if (mode !== "edit" || editorViewMode !== "firstPerson" || transformTool !== "move") {
+      setIsGrabActive(false);
+    }
+  }, [editorViewMode, mode, transformTool]);
+
+  useEffect(() => {
+    setIsGrabActive(false);
+  }, [selectedObject]);
 
   useEffect(() => {
     setSelectedRoomIndex((current) => clamp(Math.round(current), 0, roomConfig.roomCount - 1));
@@ -455,6 +468,7 @@ function App() {
     setSelectedObject(null);
     setEditorSettings(defaultEditorSettings);
     setCapturingShortcut(null);
+    setIsGrabActive(false);
     setMessage("已恢复示例画廊");
   }
 
@@ -921,8 +935,16 @@ function App() {
       const target = event.target instanceof Element ? event.target : null;
       const isTyping = Boolean(target?.closest("input, textarea, select"));
       const isPointerLocked = document.pointerLockElement !== null;
+      const isFirstPersonMovementKey =
+        editorViewMode === "firstPerson" &&
+        isPointerLocked &&
+        ["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ShiftRight"].includes(event.code);
 
       if (isTyping && !isPointerLocked) {
+        return;
+      }
+
+      if (isFirstPersonMovementKey) {
         return;
       }
 
@@ -960,6 +982,13 @@ function App() {
 
       if (action === "deleteSelection") {
         deleteSelectedObject();
+        return;
+      }
+
+      if (action === "grabSelection") {
+        if (selectedObject && editorViewMode === "firstPerson" && transformTool === "move") {
+          setIsGrabActive((current) => !current);
+        }
         return;
       }
 
@@ -1018,6 +1047,8 @@ function App() {
     selectedRoomIndex,
     editorSettings.shortcuts,
     capturingShortcut,
+    editorViewMode,
+    transformTool,
   ]);
 
   return (
@@ -1033,6 +1064,7 @@ function App() {
           editorViewMode={editorViewMode}
           transformTool={transformTool}
           editorSettings={editorSettings}
+          isGrabActive={isGrabActive}
           pendingPlacementImageId={pendingPlacementIds[0] ?? null}
           selectedImageId={selectedImageId}
           selectedWallId={selectedWallId}
@@ -1211,6 +1243,7 @@ function App() {
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.nudgeForward)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.nudgeBackward)}</kbd> 前后/高度</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.rotateLeft)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.rotateRight)}</kbd> 旋转墙壁</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.scaleUp)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.scaleDown)}</kbd> 缩放</span>
+              <span><kbd>{formatKeyCode(editorSettings.shortcuts.grabSelection)}</kbd> 抓取/释放</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.deleteSelection)}</kbd> 删除</span>
             </div>
           </section>
@@ -1249,6 +1282,22 @@ function App() {
                 <span>缩放</span>
               </button>
             </div>
+
+            {editorViewMode === "firstPerson" && transformTool === "move" ? (
+              <button
+                type="button"
+                className={`tool-button secondary grab-button ${isGrabActive ? "active" : ""}`}
+                onClick={() => selectedObject && setIsGrabActive((current) => !current)}
+                disabled={!selectedObject}
+              >
+                <Move size={17} />
+                <span>
+                  {isGrabActive
+                    ? "释放准星跟随"
+                    : `抓取到准星 (${formatKeyCode(editorSettings.shortcuts.grabSelection)})`}
+                </span>
+              </button>
+            ) : null}
 
             {!selectedObject ? (
               <p className="empty-inspector">点击画作、墙壁、门或房间开始编辑。</p>

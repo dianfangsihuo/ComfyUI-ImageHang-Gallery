@@ -15,6 +15,7 @@ export type EditorShortcutAction =
   | "rotateRight"
   | "scaleUp"
   | "scaleDown"
+  | "grabSelection"
   | "deleteSelection";
 export type GalleryWall = "north" | "south" | "west" | "east";
 export type GalleryWallTarget = GalleryWall | string;

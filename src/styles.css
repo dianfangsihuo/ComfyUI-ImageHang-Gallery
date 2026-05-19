@@ -638,6 +638,15 @@ kbd {
   background: #332b24;
 }
 
+.grab-button {
+  border: 1px solid rgba(75, 62, 48, 0.12);
+}
+
+.grab-button.active {
+  color: #143c2e;
+  background: #ccebdd;
+}
+
 .empty-inspector {
   margin: 0;
   padding: 10px 12px;

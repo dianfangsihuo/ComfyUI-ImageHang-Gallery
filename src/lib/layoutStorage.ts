@@ -33,6 +33,7 @@ export const defaultEditorSettings: EditorSettings = {
     rotateRight: "KeyE",
     scaleUp: "Equal",
     scaleDown: "Minus",
+    grabSelection: "KeyF",
     deleteSelection: "Delete",
   },
   mouseSensitivity: 0.0024,
