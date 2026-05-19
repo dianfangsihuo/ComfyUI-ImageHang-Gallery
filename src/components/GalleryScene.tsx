@@ -33,7 +33,9 @@ interface GallerySceneProps {
   onSelectWall: (id: string) => void;
   onSelectDoor: (id: string) => void;
   onSelectRoom: (roomIndex: number) => void;
+  onUpdateImageLayout: (id: string, patch: Partial<GalleryFrameLayout>) => void;
   onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
+  onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
 }
 
@@ -100,6 +102,53 @@ function getCustomWallMount(room: GalleryRoomConfig, wall: GalleryCustomWall) {
     position: [roomOffset(room, wall.roomIndex) + wall.x, 0, wall.z] as [number, number, number],
     rotation: [0, wall.rotation, 0] as [number, number, number],
   };
+}
+
+function getWallBasis(room: GalleryRoomConfig, wall: GalleryWallTarget, customWalls: GalleryCustomWall[]) {
+  const built = parseBuiltWallTarget(wall);
+
+  if (built) {
+    const mount = getWallMount(room, built.wall, built.roomIndex);
+    const normal = new THREE.Vector3(0, 0, 1).applyEuler(
+      new THREE.Euler(...mount.rotation, "XYZ"),
+    );
+    const axis = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(...mount.rotation, "XYZ"));
+
+    return {
+      target: wall,
+      position: new THREE.Vector3(...mount.position),
+      normal,
+      axis,
+      height: room.height,
+      length: getWallLength(room, built.wall),
+    };
+  }
+
+  const customWall = customWalls.find((item) => item.id === wall);
+  if (!customWall) {
+    return null;
+  }
+
+  const mount = getCustomWallMount(room, customWall);
+  const normal = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(...mount.rotation, "XYZ"));
+  const axis = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(...mount.rotation, "XYZ"));
+
+  return {
+    target: wall,
+    position: new THREE.Vector3(...mount.position),
+    normal,
+    axis,
+    height: customWall.height,
+    length: customWall.length,
+  };
+}
+
+function getAllWallTargets(room: GalleryRoomConfig, customWalls: GalleryCustomWall[]) {
+  const builtTargets = Array.from({ length: room.roomCount }, (_, roomIndex) =>
+    wallOrder.map((wall) => builtWallTarget(roomIndex, wall)),
+  ).flat();
+
+  return [...builtTargets, ...customWalls.map((wall) => wall.id)];
 }
 
 function defaultWidthFor(image: GalleryImage) {
@@ -315,12 +364,6 @@ function FirstPersonLookControls({ mode }: { mode: AppMode }) {
     };
   }, [camera, gl, mode]);
 
-  useEffect(() => {
-    if (mode === "edit" && document.pointerLockElement === gl.domElement) {
-      document.exitPointerLock();
-    }
-  }, [gl, mode]);
-
   return null;
 }
 
@@ -526,6 +569,7 @@ function Room({
   roomIndex,
   isEditMode,
   isSelected,
+  editorViewMode,
   pendingPlacementImageId,
   onSelectRoom,
   onPlaceImageOnWall,
@@ -534,6 +578,7 @@ function Room({
   roomIndex: number;
   isEditMode: boolean;
   isSelected: boolean;
+  editorViewMode: EditorViewMode;
   pendingPlacementImageId: string | null;
   onSelectRoom: (roomIndex: number) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
@@ -553,7 +598,7 @@ function Room({
     );
   };
   const selectRoom = (event: ThreeEvent<MouseEvent>) => {
-    if (!isEditMode) {
+    if (!isEditMode || editorViewMode !== "topdown") {
       return;
     }
 
@@ -739,6 +784,135 @@ function SelectedWallDomDrag({
       window.removeEventListener("pointercancel", stopDrag);
     };
   }, [camera, floorPlane, gl, hitPoint, onUpdateCustomWall, pointer, raycaster, room]);
+
+  return null;
+}
+
+function FirstPersonAimFollower({
+  room,
+  customWalls,
+  selectedImageId,
+  selectedWallId,
+  selectedDoorId,
+  transformTool,
+  onUpdateImageLayout,
+  onUpdateCustomWall,
+  onUpdateDoor,
+}: {
+  room: GalleryRoomConfig;
+  customWalls: GalleryCustomWall[];
+  selectedImageId: string | null;
+  selectedWallId: string | null;
+  selectedDoorId: string | null;
+  transformTool: EditorTransformTool;
+  onUpdateImageLayout: (id: string, patch: Partial<GalleryFrameLayout>) => void;
+  onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
+  onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
+}) {
+  const { camera } = useThree();
+  const ray = useMemo(() => new THREE.Ray(), []);
+  const floorPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const hitPoint = useMemo(() => new THREE.Vector3(), []);
+  const direction = useMemo(() => new THREE.Vector3(), []);
+  const lastUpdate = useRef(0);
+
+  useFrame((state) => {
+    if (transformTool !== "move" || document.pointerLockElement !== state.gl.domElement) {
+      return;
+    }
+
+    if (state.clock.elapsedTime - lastUpdate.current < 0.035) {
+      return;
+    }
+
+    lastUpdate.current = state.clock.elapsedTime;
+    camera.getWorldDirection(direction);
+    ray.set(camera.position, direction);
+
+    if (selectedWallId) {
+      if (!ray.intersectPlane(floorPlane, hitPoint)) {
+        return;
+      }
+
+      const wall = customWalls.find((item) => item.id === selectedWallId);
+      if (!wall) {
+        return;
+      }
+
+      onUpdateCustomWall(selectedWallId, {
+        x: hitPoint.x - roomOffset(room, wall.roomIndex),
+        z: hitPoint.z,
+      });
+      return;
+    }
+
+    if (!selectedImageId && !selectedDoorId) {
+      return;
+    }
+
+    let bestHit:
+      | {
+          distance: number;
+          wall: GalleryWallTarget;
+          offset: number;
+          height: number;
+        }
+      | null = null;
+
+    for (const target of getAllWallTargets(room, customWalls)) {
+      const basis = getWallBasis(room, target, customWalls);
+      if (!basis) {
+        continue;
+      }
+
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(basis.normal, basis.position);
+      if (!ray.intersectPlane(plane, hitPoint)) {
+        continue;
+      }
+
+      const local = hitPoint.clone().sub(basis.position);
+      const offset = local.dot(basis.axis);
+      const height = hitPoint.y;
+
+      if (
+        Math.abs(offset) > basis.length / 2 ||
+        height < 0.25 ||
+        height > basis.height + 0.2
+      ) {
+        continue;
+      }
+
+      const distance = hitPoint.distanceTo(camera.position);
+      if (!bestHit || distance < bestHit.distance) {
+        bestHit = {
+          distance,
+          wall: target,
+          offset,
+          height,
+        };
+      }
+    }
+
+    if (!bestHit) {
+      return;
+    }
+
+    if (selectedImageId) {
+      onUpdateImageLayout(selectedImageId, {
+        wall: bestHit.wall,
+        offset: bestHit.offset,
+        height: bestHit.height,
+      });
+      return;
+    }
+
+    if (selectedDoorId) {
+      onUpdateDoor(selectedDoorId, {
+        wall: bestHit.wall,
+        offset: bestHit.offset,
+      });
+    }
+  });
 
   return null;
 }
@@ -1079,7 +1253,9 @@ export default function GalleryScene({
   onSelectWall,
   onSelectDoor,
   onSelectRoom,
+  onUpdateImageLayout,
   onUpdateCustomWall,
+  onUpdateDoor,
   onPlaceImageOnWall,
 }: GallerySceneProps) {
   const isEditMode = mode === "edit";
@@ -1112,6 +1288,7 @@ export default function GalleryScene({
           roomIndex={roomIndex}
           isEditMode={isEditMode}
           isSelected={selectedRoomIndex === roomIndex}
+          editorViewMode={editorViewMode}
           pendingPlacementImageId={pendingPlacementImageId}
           onSelectRoom={onSelectRoom}
           onPlaceImageOnWall={onPlaceImageOnWall}
@@ -1179,6 +1356,19 @@ export default function GalleryScene({
         <>
           <FirstPersonLookControls mode={mode} />
           <PlayerMovement room={roomConfig} />
+          {isEditMode ? (
+            <FirstPersonAimFollower
+              room={roomConfig}
+              customWalls={customWalls}
+              selectedImageId={selectedImageId}
+              selectedWallId={selectedWallId}
+              selectedDoorId={selectedDoorId}
+              transformTool={transformTool}
+              onUpdateImageLayout={onUpdateImageLayout}
+              onUpdateCustomWall={onUpdateCustomWall}
+              onUpdateDoor={onUpdateDoor}
+            />
+          ) : null}
         </>
       )}
     </Canvas>

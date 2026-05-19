@@ -393,19 +393,32 @@ function App() {
       return;
     }
 
-    const wall = patch.wall ?? selectedLayout.wall;
+    updateImageLayout(selectedImage.id, patch);
+  }
+
+  function updateImageLayout(id: string, patch: Partial<GalleryFrameLayout>) {
+    const imageIndex = sceneImages.findIndex((image) => image.id === id);
+    const image = imageIndex >= 0 ? sceneImages[imageIndex] : undefined;
+
+    if (!image) {
+      return;
+    }
+
+    const currentLayout =
+      layouts[id] ?? getDefaultLayout(image, Math.max(imageIndex, 0), roomConfig);
+    const wall = patch.wall ?? currentLayout.wall;
     const limit = getWallOffsetLimit(roomConfig, customWalls, wall);
     const wallHeight = getWallTargetHeight(roomConfig, customWalls, wall);
 
     setLayouts((current) => ({
       ...current,
-      [selectedImage.id]: {
-        ...selectedLayout,
+      [id]: {
+        ...currentLayout,
         ...patch,
         wall,
-        offset: clamp(patch.offset ?? selectedLayout.offset, -limit, limit),
-        height: clamp(patch.height ?? selectedLayout.height, 1.1, wallHeight - 1.15),
-        width: clamp(patch.width ?? selectedLayout.width, 1.2, 5),
+        offset: clamp(patch.offset ?? currentLayout.offset, -limit, limit),
+        height: clamp(patch.height ?? currentLayout.height, 1.1, wallHeight - 1.15),
+        width: clamp(patch.width ?? currentLayout.width, 1.2, 5),
       },
     }));
   }
@@ -660,6 +673,110 @@ function App() {
     setMessage("已删除门");
   }
 
+  function deleteSelectedObject() {
+    if (!selectedObject) {
+      return;
+    }
+
+    if (selectedObject.type === "wall") {
+      deleteCustomWall(selectedObject.id);
+      return;
+    }
+
+    if (selectedObject.type === "door") {
+      deleteDoor(selectedObject.id);
+      return;
+    }
+
+    if (selectedObject.type === "room") {
+      deleteRoom(selectedObject.roomIndex);
+      return;
+    }
+
+    if (selectedObject.type === "artwork") {
+      void removeImage(selectedObject.id);
+      setSelectedObject(null);
+      setSelectedImageId(null);
+    }
+  }
+
+  function nudgeSelectedObject(axis: "x" | "z" | "height", amount: number) {
+    if (!selectedObject) {
+      return;
+    }
+
+    if (selectedObject.type === "artwork" && selectedLayout) {
+      updateSelectedLayout(
+        axis === "height"
+          ? { height: selectedLayout.height + amount }
+          : { offset: selectedLayout.offset + amount },
+      );
+      return;
+    }
+
+    if (selectedObject.type === "door" && selectedDoor) {
+      updateDoor(
+        selectedDoor.id,
+        axis === "height"
+          ? { height: selectedDoor.height + amount }
+          : { offset: selectedDoor.offset + amount },
+      );
+      return;
+    }
+
+    if (selectedObject.type === "wall" && selectedWall) {
+      updateCustomWall(selectedWall.id, {
+        x: selectedWall.x + (axis === "x" ? amount : 0),
+        z: selectedWall.z + (axis === "z" ? amount : 0),
+      });
+      return;
+    }
+
+    if (selectedObject.type === "room") {
+      updateRoomConfig(
+        axis === "z"
+          ? { depth: roomConfig.depth + amount }
+          : axis === "height"
+            ? { height: roomConfig.height + amount }
+            : { width: roomConfig.width + amount },
+      );
+    }
+  }
+
+  function scaleSelectedObject(amount: number) {
+    if (!selectedObject) {
+      return;
+    }
+
+    if (selectedObject.type === "artwork" && selectedLayout) {
+      updateSelectedLayout({ width: selectedLayout.width + amount });
+      return;
+    }
+
+    if (selectedObject.type === "door" && selectedDoor) {
+      updateDoor(selectedDoor.id, { width: selectedDoor.width + amount });
+      return;
+    }
+
+    if (selectedObject.type === "wall" && selectedWall) {
+      updateCustomWall(selectedWall.id, { length: selectedWall.length + amount });
+      return;
+    }
+
+    if (selectedObject.type === "room") {
+      updateRoomConfig({
+        width: roomConfig.width + amount,
+        depth: roomConfig.depth + amount,
+      });
+    }
+  }
+
+  function rotateSelectedObject(amount: number) {
+    if (selectedObject?.type === "wall" && selectedWall) {
+      updateCustomWall(selectedWall.id, { rotation: selectedWall.rotation + amount });
+    }
+  }
+
   function placePendingImage(wall: GalleryWallTarget, offset: number, height: number) {
     const imageId = pendingPlacementIds[0];
 
@@ -693,6 +810,126 @@ function App() {
   const selectedDoor = selectedDoorId ? doors.find((door) => door.id === selectedDoorId) : undefined;
   const selectedRoomLabel = `房间 ${selectedRoomIndex + 1}`;
 
+  useEffect(() => {
+    if (mode !== "edit") {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const isTyping = Boolean(target?.closest("input, textarea, select"));
+      const isPointerLocked = document.pointerLockElement !== null;
+
+      if (isTyping && !isPointerLocked) {
+        return;
+      }
+
+      const handledKeys = new Set([
+        "KeyG",
+        "KeyR",
+        "KeyS",
+        "KeyV",
+        "KeyQ",
+        "KeyE",
+        "KeyI",
+        "KeyK",
+        "KeyJ",
+        "KeyL",
+        "Equal",
+        "NumpadAdd",
+        "Minus",
+        "NumpadSubtract",
+        "Delete",
+        "Backspace",
+      ]);
+
+      if (!handledKeys.has(event.code)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+
+      if (event.code === "KeyG") {
+        setTransformTool("move");
+        return;
+      }
+
+      if (event.code === "KeyR") {
+        setTransformTool("rotate");
+        return;
+      }
+
+      if (event.code === "KeyS") {
+        setTransformTool("scale");
+        return;
+      }
+
+      if (event.code === "KeyV") {
+        setEditorViewMode((current) => (current === "topdown" ? "firstPerson" : "topdown"));
+        return;
+      }
+
+      if (event.code === "Delete" || event.code === "Backspace") {
+        deleteSelectedObject();
+        return;
+      }
+
+      if (event.code === "KeyQ") {
+        rotateSelectedObject(-0.08);
+        return;
+      }
+
+      if (event.code === "KeyE") {
+        rotateSelectedObject(0.08);
+        return;
+      }
+
+      if (event.code === "KeyJ") {
+        nudgeSelectedObject("x", -0.2);
+        return;
+      }
+
+      if (event.code === "KeyL") {
+        nudgeSelectedObject("x", 0.2);
+        return;
+      }
+
+      if (event.code === "KeyI") {
+        nudgeSelectedObject(selectedObject?.type === "wall" || selectedObject?.type === "room" ? "z" : "height", 0.2);
+        return;
+      }
+
+      if (event.code === "KeyK") {
+        nudgeSelectedObject(selectedObject?.type === "wall" || selectedObject?.type === "room" ? "z" : "height", -0.2);
+        return;
+      }
+
+      if (event.code === "Equal" || event.code === "NumpadAdd") {
+        scaleSelectedObject(0.2);
+        return;
+      }
+
+      if (event.code === "Minus" || event.code === "NumpadSubtract") {
+        scaleSelectedObject(-0.2);
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [
+    mode,
+    selectedObject,
+    selectedLayout,
+    selectedDoor,
+    selectedWall,
+    roomConfig,
+    selectedRoomIndex,
+  ]);
+
   return (
     <main className={`app-shell ${mode}-shell`}>
       <section className="gallery-stage" aria-label="3D gallery viewport">
@@ -714,9 +951,16 @@ function App() {
           onSelectWall={selectWall}
           onSelectDoor={selectDoor}
           onSelectRoom={selectRoom}
+          onUpdateImageLayout={updateImageLayout}
           onUpdateCustomWall={updateCustomWall}
+          onUpdateDoor={updateDoor}
           onPlaceImageOnWall={placePendingImage}
         />
+        {mode === "edit" ? (
+          <div className={`edit-crosshair ${editorViewMode === "firstPerson" ? "active" : ""}`}>
+            <span />
+          </div>
+        ) : null}
         <div className="floating-mode-switch" aria-label="Mode switch">
           <button
             type="button"
@@ -866,6 +1110,17 @@ function App() {
               </strong>
               <span>对象</span>
               <strong>从组件市场添加房间、墙壁、门，再选择对象调整参数</strong>
+            </div>
+            <div className="shortcut-grid" aria-label="Editor shortcuts">
+              <span><kbd>V</kbd> 切换视角</span>
+              <span><kbd>G</kbd> 移动</span>
+              <span><kbd>R</kbd> 旋转</span>
+              <span><kbd>S</kbd> 缩放</span>
+              <span><kbd>J</kbd><kbd>L</kbd> 左右移动</span>
+              <span><kbd>I</kbd><kbd>K</kbd> 前后/高度</span>
+              <span><kbd>Q</kbd><kbd>E</kbd> 旋转墙壁</span>
+              <span><kbd>+</kbd><kbd>-</kbd> 缩放</span>
+              <span><kbd>Del</kbd> 删除</span>
             </div>
           </section>
         ) : null}

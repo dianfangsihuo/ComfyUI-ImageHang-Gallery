@@ -128,6 +128,54 @@ button {
   font-weight: 800;
 }
 
+.edit-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.edit-crosshair::before,
+.edit-crosshair::after {
+  position: absolute;
+  content: "";
+  background: rgba(255, 250, 240, 0.76);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.38);
+}
+
+.edit-crosshair::before {
+  left: 10px;
+  top: 3px;
+  width: 2px;
+  height: 16px;
+}
+
+.edit-crosshair::after {
+  left: 3px;
+  top: 10px;
+  width: 16px;
+  height: 2px;
+}
+
+.edit-crosshair span {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  width: 6px;
+  height: 6px;
+  border: 1px solid rgba(21, 21, 21, 0.5);
+  border-radius: 50%;
+  background: #f6c453;
+}
+
+.edit-crosshair.active span {
+  background: #79d7b6;
+}
+
 .control-panel {
   display: flex;
   flex-direction: column;
@@ -493,6 +541,38 @@ h1 {
   color: #211b15;
   font-size: 0.82rem;
   line-height: 1.35;
+}
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.shortcut-grid span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: #4f4438;
+  font-size: 0.75rem;
+  font-weight: 850;
+}
+
+kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border: 1px solid rgba(69, 55, 38, 0.2);
+  border-radius: 5px;
+  color: #211b15;
+  background: #fbf7ef;
+  box-shadow: inset 0 -1px 0 rgba(69, 55, 38, 0.18);
+  font-size: 0.68rem;
+  font-weight: 950;
 }
 
 .view-toggle {
