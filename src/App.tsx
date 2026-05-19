@@ -1283,7 +1283,8 @@ function App() {
       }
 
       if (action === "grabSelection") {
-        if (selectedObject && editorViewMode === "firstPerson" && transformTool === "move") {
+        if (selectedObject && editorViewMode === "firstPerson") {
+          setTransformTool("move");
           setIsGrabActive((current) => !current);
         }
         return;

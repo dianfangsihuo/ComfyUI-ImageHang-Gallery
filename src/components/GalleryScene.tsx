@@ -88,8 +88,8 @@ const roomGap = 0.18;
 const eyeHeight = 1.75;
 const wallInset = 0.18;
 const customWallDepth = 0.18;
-const wallSurfaceOffset = customWallDepth / 2 + 0.012;
-const artworkFrameDepth = 0.035;
+const wallSurfaceOffset = customWallDepth / 2 + 0.002;
+const artworkFrameDepth = 0.018;
 const wallOrder: GalleryWall[] = ["north", "west", "east", "south"];
 
 function getRoomDimensions(room: GalleryRoomConfig, roomIndex: number) {
@@ -2691,6 +2691,7 @@ function Artwork({
   const frameOuterWidth = width + 0.28;
   const frameOuterHeight = height + 0.28;
   const selectionSize = 0.045;
+  const artworkZ = customTarget ? -0.006 : 0;
 
   useMemo(() => {
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -2721,6 +2722,7 @@ function Artwork({
 
   return (
     <group position={mount.position} rotation={mount.rotation}>
+      <group position={[0, 0, artworkZ]}>
       <group position={[layout.offset, layout.height, 0]}>
         {isSelected ? (
           <group position={[0, 0, artworkFrameDepth + 0.012]}>
@@ -2760,6 +2762,7 @@ function Artwork({
           <meshBasicMaterial map={texture} toneMapped={false} />
         </mesh>
         <pointLight position={[0, 1.35, 0.18]} intensity={0.55} distance={4.2} color="#fff6df" />
+      </group>
       </group>
     </group>
   );
