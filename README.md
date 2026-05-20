@@ -1,12 +1,12 @@
-# Image Hang
+# ComfyUI Image Hang Gallery
 
-Image Hang 是一个给 ComfyUI 使用的 3D 画廊扩展。它可以自动收集 ComfyUI 生成图，在 ComfyUI 页面里管理作品，并一键打开独立 3D 画廊，把作品挂进可行走的展厅。
+ComfyUI Image Hang Gallery 是一个给 ComfyUI 使用的 3D 画廊扩展。它可以自动收集 ComfyUI 生成图，在 ComfyUI 页面里管理作品，并一键打开独立 3D 画廊，把作品挂进可行走的展厅。
 
 ## 功能
 
 - ComfyUI 右下角提供可拖动、可缩放的画廊面板。
 - 自动收集工作流生成图，支持查看和删除。
-- 点击 `进入画廊` 后自动启动本地 3D 画廊服务。
+- 点击 `进入画廊` 后自动安装缺失的前端依赖、启动本地 3D 画廊服务。
 - 3D 画廊支持观赏模式、编辑模式、房间扩展、自定义墙、门、挂画位置和尺寸调整。
 - 画廊数据保存到项目文件，不依赖浏览器缓存；换 Chrome、Edge 或不同浏览器 Profile 也能沿用同一套作品和地图。
 
@@ -21,13 +21,6 @@ cd D:\path\to\ComfyUI\custom_nodes
 git clone https://github.com/dianfangsihuo/image-hang.git
 ```
 
-然后安装 3D 画廊前端依赖：
-
-```powershell
-cd image-hang
-npm install
-```
-
 重启 ComfyUI 后，页面右下角会出现 `画廊` 按钮。
 
 如果你的 ComfyUI Manager 支持从 Git URL 安装，也可以填入：
@@ -36,7 +29,7 @@ npm install
 https://github.com/dianfangsihuo/image-hang.git
 ```
 
-安装后仍需要在 `custom_nodes/image-hang` 目录执行一次 `npm install`，用于本地 3D 画廊前端服务。
+Manager 安装后同样可以直接重启 ComfyUI 使用。第一次点击 `进入画廊` 时，扩展会自动检查并安装 3D 画廊前端依赖，然后启动本地服务。你不需要手动运行 `npm install`。如果机器上没有 Node.js/npm，面板会提示先安装 Node.js。
 
 ## ZIP 安装
 
@@ -50,13 +43,7 @@ https://github.com/dianfangsihuo/image-hang.git
 ComfyUI/custom_nodes/image-hang
 ```
 
-4. 在该目录运行：
-
-```powershell
-npm install
-```
-
-5. 重启 ComfyUI。
+4. 重启 ComfyUI。
 
 ## ComfyUI 使用
 
@@ -66,7 +53,7 @@ npm install
 - 勾选 `启动后自动弹出`，下次打开 ComfyUI 会自动展开面板。
 - 拖动画廊标题栏可以移动面板。
 - 拖动右下角手柄可以缩放面板。
-- 点击 `进入画廊` 会自动启动本地 3D 画廊服务，并打开浏览器页面。
+- 点击 `进入画廊` 会自动安装缺失依赖、启动本地 3D 画廊服务，并打开浏览器页面。
 
 ComfyUI 原始收集数据保存在：
 
@@ -110,7 +97,7 @@ http://127.0.0.1:5174/
 - 门
 - 编辑器设置和快捷键
 
-因此只要打开的是同一个本地 Image Hang 服务，不管使用哪个浏览器，都能看到同一套画廊地图和作品。
+因此只要打开的是同一个本地 ComfyUI Image Hang Gallery 服务，不管使用哪个浏览器，都能看到同一套画廊地图和作品。
 
 ## 操作
 
@@ -132,6 +119,6 @@ vite.config.ts                                  本地文件保存接口
 
 ## 截图
 
-![Image Hang 3D 画廊演示](docs/images/image-hang-gallery-demo.png)
+![ComfyUI Image Hang Gallery 3D 画廊演示](docs/images/image-hang-gallery-demo.png)
 
-![ComfyUI 工作流中的 Image Hang 画廊插件演示](docs/images/comfyui-gallery-plugin-demo.png)
+![ComfyUI 工作流中的画廊插件演示](docs/images/comfyui-gallery-plugin-demo.png)

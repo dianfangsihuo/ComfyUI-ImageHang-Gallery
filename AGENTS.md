@@ -25,4 +25,5 @@ On unexpected command/tool/API failure, user correction, outdated knowledge, or 
 ## Dependencies
 
 - The user permits installing development dependencies as needed.
+- When a task needs a missing CLI/tool/dependency such as `gh`, `winget`, `node`, `pnpm`, or similar, do not stop at reporting it is missing. Ask whether to install it, name the installer/command you plan to use, and continue after approval. If the user has explicitly said to install it now, proceed with the install path available on the machine.
 - Playwright is installed globally at `C:\Users\Administrator\AppData\Roaming\npm\node_modules`. In Node REPL sessions, add that directory with `js_add_node_module_dir` before importing `playwright`.

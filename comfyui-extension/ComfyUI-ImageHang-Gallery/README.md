@@ -1,6 +1,6 @@
 # ComfyUI Image Hang Gallery
 
-Image Hang 的 ComfyUI 集成扩展。推荐直接安装仓库根目录，而不是只复制这个子目录。
+ComfyUI Image Hang Gallery 的 ComfyUI 集成扩展。推荐直接安装仓库根目录，而不是只复制这个子目录。
 
 ## 推荐安装
 
@@ -15,11 +15,11 @@ https://github.com/dianfangsihuo/image-hang.git
 ```powershell
 cd D:\path\to\ComfyUI\custom_nodes
 git clone https://github.com/dianfangsihuo/image-hang.git
-cd image-hang
-npm install
 ```
 
 重启 ComfyUI 后，右下角会出现 `画廊` 按钮。
+
+第一次点击 `进入画廊` 时，扩展会自动检查并安装 3D 画廊前端依赖，然后启动本地服务。你不需要手动运行 `npm install`。如果机器上没有 Node.js/npm，面板会提示先安装 Node.js。
 
 ## ZIP 安装
 
@@ -27,12 +27,6 @@ npm install
 
 ```text
 ComfyUI/custom_nodes/image-hang
-```
-
-然后在 `image-hang` 目录运行：
-
-```powershell
-npm install
 ```
 
 最后重启 ComfyUI。
@@ -43,7 +37,7 @@ npm install
 - 查看和删除已收集图片。
 - `自动收集生成图`：工作流执行完成后自动保存输出图片。
 - `启动后自动弹出`：打开 ComfyUI 后自动展开面板。
-- `进入画廊`：自动启动本地 3D 画廊服务，并打开可行走的展厅。
+- `进入画廊`：自动安装缺失依赖、启动本地 3D 画廊服务，并打开可行走的展厅。
 
 ## 保存位置
 
