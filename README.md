@@ -2,6 +2,20 @@
 
 ComfyUI Image Hang Gallery 是一个给 ComfyUI 使用的 3D 画廊扩展。它可以自动收集 ComfyUI 生成图，在 ComfyUI 页面里管理作品，并一键打开独立 3D 画廊，把作品挂进可行走的展厅。
 
+## 展示
+
+![ComfyUI Image Hang Gallery 宣传片段](docs/images/showcase-preview.gif)
+
+完整宣传视频：[`image-hang-showcase.mp4`](image-hang-showcase.mp4)
+
+| 观赏模式 | 第一人称编辑 |
+| --- | --- |
+| ![观赏模式中的 3D 画廊](docs/images/showcase-view-mode.png) | ![第一人称编辑挂画](docs/images/showcase-first-person-edit.png) |
+
+| 俯视编辑 | 自定义组件 |
+| --- | --- |
+| ![俯视编辑房间布局](docs/images/showcase-topdown-edit.png) | ![自定义组件与画廊面板](docs/images/showcase-components.png) |
+
 ## 功能
 
 - ComfyUI 右下角提供可拖动、可缩放的画廊面板。
@@ -117,7 +131,7 @@ vite.config.ts                                  本地文件保存接口
 .gallery-data/                                  运行时本地画廊数据，不提交到仓库
 ```
 
-## 截图
+## 更多截图
 
 ![ComfyUI Image Hang Gallery 3D 画廊演示](docs/images/image-hang-gallery-demo.png)
 
