@@ -57,6 +57,20 @@ button {
   display: block;
 }
 
+.room-dimension-label {
+  padding: 5px 8px;
+  border: 1px solid rgba(47, 63, 53, 0.22);
+  border-radius: 6px;
+  color: #25392f;
+  background: rgba(250, 246, 235, 0.92);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .enter-button {
   position: absolute;
   left: 24px;
@@ -449,6 +463,13 @@ h1 {
   background: rgba(255, 255, 255, 0.52);
   font-size: 0.86rem;
   line-height: 1.45;
+}
+
+.message.subtle {
+  margin-top: -10px;
+  color: #6f624f;
+  background: rgba(255, 255, 255, 0.32);
+  font-size: 0.78rem;
 }
 
 .editor-panel {

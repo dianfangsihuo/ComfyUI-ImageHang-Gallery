@@ -1,4 +1,5 @@
 import { Canvas, ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
+import { Html } from "@react-three/drei";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type {
@@ -34,6 +35,7 @@ interface GallerySceneProps {
   selectedWallId: string | null;
   selectedDoorId: string | null;
   selectedRoomIndex: number;
+  selectedObject: SelectedEditableObject | null;
   onSelectImage: (id: string) => void;
   onSelectWall: (id: string) => void;
   onSelectDoor: (id: string) => void;
@@ -59,6 +61,12 @@ type EditableHit = {
   object: THREE.Object3D;
   point: THREE.Vector3;
 };
+
+type SelectedEditableObject =
+  | { type: "artwork"; id: string }
+  | { type: "wall"; id: string }
+  | { type: "door"; id: string }
+  | { type: "room"; roomIndex: number };
 
 type WallOpening = {
   id: string;
@@ -86,11 +94,21 @@ const fallbackRoom: GalleryRoomConfig = {
 
 const roomGap = 0.18;
 const eyeHeight = 1.75;
-const wallInset = 0.18;
-const customWallDepth = 0.18;
+const wallDepth = 0.18;
+const wallInset = wallDepth / 2 + 0.002;
+const customWallDepth = wallDepth;
 const wallSurfaceOffset = customWallDepth / 2 + 0.002;
+const customWallPlacementOffset = wallSurfaceOffset;
 const artworkFrameDepth = 0.018;
+const roomEditSnap = 0.5;
+const minRoomWidth = 4;
+const maxRoomWidth = 40;
+const minRoomDepth = 6;
+const maxRoomDepth = 48;
 const wallOrder: GalleryWall[] = ["north", "west", "east", "south"];
+
+type RoomResizeHandle = "north" | "south" | "west" | "east" | "northWest" | "northEast" | "southWest" | "southEast";
+type WallEndpointHandle = "start" | "end";
 
 function getRoomDimensions(room: GalleryRoomConfig, roomIndex: number) {
   return room.rooms?.[roomIndex] ?? {
@@ -144,6 +162,10 @@ function parseBuiltWallTarget(target: GalleryWallTarget) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function snapEditValue(value: number, freeMove: boolean) {
+  return freeMove ? value : Math.round(value / roomEditSnap) * roomEditSnap;
 }
 
 function getWallLength(room: GalleryRoomConfig, wall: GalleryWall, roomIndex = 0) {
@@ -271,6 +293,40 @@ function getAllWallTargets(room: GalleryRoomConfig, customWalls: GalleryCustomWa
     ...builtTargets,
     ...customWalls.flatMap((wall) => [wall.id, customWallBackTarget(wall.id)]),
   ];
+}
+
+function getClosestWallPlacement(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  point: THREE.Vector3,
+) {
+  return getAllWallTargets(room, customWalls).reduce<{
+    wall: GalleryWallTarget;
+    offset: number;
+    score: number;
+  } | null>((best, target) => {
+    const basis = getWallBasis(room, target, customWalls);
+
+    if (!basis) {
+      return best;
+    }
+
+    const local = point.clone().sub(basis.position);
+    const rawOffset = local.dot(basis.axis);
+    const outsideDistance = Math.max(0, Math.abs(rawOffset) - basis.length / 2);
+    const wallDistance = Math.abs(local.dot(basis.normal));
+    const score = wallDistance + outsideDistance * 2.5;
+
+    if (best && best.score <= score) {
+      return best;
+    }
+
+    return {
+      wall: target,
+      offset: clamp(rawOffset, -basis.length / 2 + 0.35, basis.length / 2 - 0.35),
+      score,
+    };
+  }, null);
 }
 
 function getDoorWorldPosition(
@@ -714,11 +770,13 @@ function PlayerMovement({
   settings,
   doors,
   customWalls,
+  enabled,
 }: {
   room: GalleryRoomConfig;
   settings: EditorSettings;
   doors: GalleryDoor[];
   customWalls: GalleryCustomWall[];
+  enabled: boolean;
 }) {
   const { camera, gl } = useThree();
   const keys = useRef(new Set<string>());
@@ -729,9 +787,17 @@ function PlayerMovement({
   const forward = useMemo(() => new THREE.Vector3(), []);
   const right = useMemo(() => new THREE.Vector3(), []);
   const currentRoomIndexRef = useRef(0);
+  const previousEnabled = useRef(enabled);
+  const enabledRef = useRef(enabled);
+  const firstPersonPosition = useRef(new THREE.Vector3(0, eyeHeight, 7));
+
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
 
   useEffect(() => {
     camera.position.set(0, eyeHeight, 7);
+    firstPersonPosition.current.copy(camera.position);
 
     const shouldIgnoreKeyboard = (event: KeyboardEvent) => {
       const target = event.target instanceof Element ? event.target : null;
@@ -741,6 +807,10 @@ function PlayerMovement({
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
+      if (!enabledRef.current) {
+        return;
+      }
+
       if (shouldIgnoreKeyboard(event)) {
         return;
       }
@@ -782,6 +852,19 @@ function PlayerMovement({
   }, [camera, gl, settings.jumpPower]);
 
   useFrame((_, delta) => {
+    if (!enabled) {
+      keys.current.clear();
+      verticalVelocity.current = 0;
+      previousEnabled.current = false;
+      return;
+    }
+
+    if (!previousEnabled.current) {
+      camera.position.copy(firstPersonPosition.current);
+      camera.position.y = eyeHeight;
+      previousEnabled.current = true;
+    }
+
     const previousPosition = camera.position.clone();
 
     direction.set(0, 0, 0);
@@ -877,6 +960,7 @@ function PlayerMovement({
     }
 
     resolveCustomWallCollision(camera.position, previousPosition, room, customWalls, doors);
+    firstPersonPosition.current.copy(camera.position);
 
     for (const passage of relatedPassages) {
       if (pointInRoomWalkBounds(room, passage.targetRoomIndex, camera.position, 0.7)) {
@@ -897,18 +981,22 @@ function PlayerMovement({
 function FirstPersonLookControls({
   mode,
   mouseSensitivity,
+  enabled,
 }: {
   mode: AppMode;
   mouseSensitivity: number;
+  enabled: boolean;
 }) {
   const { camera, gl } = useThree();
   const yaw = useRef(0);
   const pitch = useRef(0);
+  const previousEnabled = useRef(enabled);
 
   useEffect(() => {
     camera.rotation.order = "YXZ";
-    yaw.current = camera.rotation.y;
-    pitch.current = camera.rotation.x;
+    camera.rotation.y = yaw.current;
+    camera.rotation.x = pitch.current;
+    camera.rotation.z = 0;
   }, [camera]);
 
   useEffect(() => {
@@ -932,18 +1020,16 @@ function FirstPersonLookControls({
       applyRotation();
     };
 
-    if (Math.abs(camera.rotation.x) > Math.PI / 3) {
-      yaw.current = 0;
-      pitch.current = 0;
+    if (enabled && !previousEnabled.current) {
       applyRotation();
-    } else {
-      camera.rotation.order = "YXZ";
-      yaw.current = camera.rotation.y;
-      pitch.current = camera.rotation.x;
-      camera.rotation.z = 0;
     }
+    previousEnabled.current = enabled;
 
     const requestPointerLock = () => {
+      if (!enabled) {
+        return;
+      }
+
       if (document.pointerLockElement !== canvas) {
         void canvas.requestPointerLock();
       }
@@ -964,7 +1050,7 @@ function FirstPersonLookControls({
     };
 
     const onMouseMove = (event: MouseEvent) => {
-      if (document.pointerLockElement === canvas) {
+      if (enabled && document.pointerLockElement === canvas) {
         rotateBy(event.movementX, event.movementY);
       }
     };
@@ -976,38 +1062,35 @@ function FirstPersonLookControls({
       document.removeEventListener("pointerdown", onDocumentPointerDown);
       document.removeEventListener("mousemove", onMouseMove);
     };
-  }, [camera, gl, mode, mouseSensitivity]);
+  }, [camera, enabled, gl, mode, mouseSensitivity]);
 
   return null;
 }
 
-function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
+function EditorCameraControls({ room, isGrabActive }: { room: GalleryRoomConfig; isGrabActive: boolean }) {
   const { camera, gl } = useThree();
   const target = useRef(new THREE.Vector3());
-  const zoomHeight = useRef(26);
+  const zoomHeight = useRef(18);
   const isPanning = useRef(false);
   const pointerId = useRef<number | null>(null);
   const hasInitialized = useRef(false);
 
   const applyCamera = () => {
     const center = target.current;
-    camera.position.set(center.x, zoomHeight.current, center.z + zoomHeight.current * 0.38);
+    camera.position.set(center.x, zoomHeight.current, center.z + zoomHeight.current * 0.18);
     camera.lookAt(center.x, 0, center.z);
     camera.updateProjectionMatrix();
   };
 
   const clampTarget = () => {
-    const firstRoom = getRoomDimensions(room, 0);
-    const lastRoom = getRoomDimensions(room, room.roomCount - 1);
+    const bounds = getGalleryBounds(room);
     const targetRoom = getRoomDimensions(room, getRoomIndexAtWorldX(room, target.current.x));
-    const totalMinX = -firstRoom.width / 2 - 2;
-    const totalMaxX = roomOffset(room, room.roomCount - 1) + lastRoom.width / 2 + 2;
 
-    target.current.x = THREE.MathUtils.clamp(target.current.x, totalMinX, totalMaxX);
+    target.current.x = THREE.MathUtils.clamp(target.current.x, bounds.minX - 2, bounds.maxX + 2);
     target.current.z = THREE.MathUtils.clamp(
       target.current.z,
-      -targetRoom.depth / 2 - 2,
-      targetRoom.depth / 2 + 2,
+      Math.min(bounds.minZ - 2, getRoomCenter(room, getRoomIndexAtWorldX(room, target.current.x)).z - targetRoom.depth / 2 - 2),
+      Math.max(bounds.maxZ + 2, getRoomCenter(room, getRoomIndexAtWorldX(room, target.current.x)).z + targetRoom.depth / 2 + 2),
     );
   };
 
@@ -1017,17 +1100,18 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
     }
 
     if (!hasInitialized.current) {
-      const centerX = roomOffset(room, room.roomCount - 1) / 2;
-      target.current.set(centerX, 0, 0);
+      const bounds = getGalleryBounds(room);
+      target.current.set((bounds.minX + bounds.maxX) / 2, 0, (bounds.minZ + bounds.maxZ) / 2);
+      zoomHeight.current = THREE.MathUtils.clamp(
+        Math.max(bounds.width, bounds.depth) * 0.82,
+        9,
+        30,
+      );
       hasInitialized.current = true;
     }
 
-    const selectedRoom = getRoomDimensions(room, getRoomIndexAtWorldX(room, target.current.x));
-    zoomHeight.current = THREE.MathUtils.clamp(
-      Math.max(selectedRoom.width, selectedRoom.depth) * 1.25,
-      18,
-      52,
-    );
+    clampTarget();
+    zoomHeight.current = THREE.MathUtils.clamp(zoomHeight.current, 7, 34);
     camera.rotation.order = "YXZ";
     applyCamera();
   }, [camera, gl, room]);
@@ -1039,9 +1123,13 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
 
   useEffect(() => {
     const canvas = gl.domElement;
+    if (isGrabActive) {
+      isPanning.current = false;
+      pointerId.current = null;
+    }
 
     const onPointerDown = (event: PointerEvent) => {
-      if (event.target !== canvas || event.button !== 0 || event.shiftKey) {
+      if (isGrabActive || event.target !== canvas || event.button !== 0 || event.shiftKey) {
         return;
       }
 
@@ -1078,9 +1166,9 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
 
       event.preventDefault();
       zoomHeight.current = THREE.MathUtils.clamp(
-        zoomHeight.current + event.deltaY * 0.026,
-        10,
-        58,
+        zoomHeight.current + event.deltaY * 0.018,
+        7,
+        34,
       );
       applyCamera();
     };
@@ -1098,7 +1186,7 @@ function EditorCameraControls({ room }: { room: GalleryRoomConfig }) {
       canvas.removeEventListener("pointercancel", stopPanning);
       canvas.removeEventListener("wheel", onWheel);
     };
-  }, [camera, gl, room]);
+  }, [camera, gl, isGrabActive, room]);
 
   useFrame(() => {
     applyCamera();
@@ -1272,16 +1360,182 @@ function Baseboards({ room }: { room: GalleryRoomDimensions }) {
 }
 
 function getGalleryBounds(room: GalleryRoomConfig) {
-  const firstRoom = getRoomDimensions(room, 0);
-  const lastRoom = getRoomDimensions(room, room.roomCount - 1);
+  const bounds = Array.from({ length: room.roomCount }, (_, index) => {
+    const dimensions = getRoomDimensions(room, index);
+    const center = getRoomCenter(room, index);
+
+    return {
+      minX: center.x - dimensions.width / 2,
+      maxX: center.x + dimensions.width / 2,
+      minZ: center.z - dimensions.depth / 2,
+      maxZ: center.z + dimensions.depth / 2,
+    };
+  });
+  const minX = Math.min(...bounds.map((bound) => bound.minX));
+  const maxX = Math.max(...bounds.map((bound) => bound.maxX));
+  const minZ = Math.min(...bounds.map((bound) => bound.minZ));
+  const maxZ = Math.max(...bounds.map((bound) => bound.maxZ));
 
   return {
-    minX: -firstRoom.width / 2,
-    maxX: roomOffset(room, room.roomCount - 1) + lastRoom.width / 2,
-    maxDepth: Math.max(
-      ...Array.from({ length: room.roomCount }, (_, index) => getRoomDimensions(room, index).depth),
-    ),
+    minX,
+    maxX,
+    minZ,
+    maxZ,
+    width: maxX - minX,
+    depth: maxZ - minZ,
+    maxDepth: maxZ - minZ,
   };
+}
+
+function RoomEditHandles({
+  roomIndex,
+  center,
+  dimensions,
+  onSelectRoom,
+  onUpdateRoom,
+}: {
+  roomIndex: number;
+  center: { x: number; z: number };
+  dimensions: GalleryRoomDimensions;
+  onSelectRoom: (roomIndex: number) => void;
+  onUpdateRoom: (roomIndex: number, patch: Partial<GalleryRoomDimensions>) => void;
+}) {
+  const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const dragPoint = useMemo(() => new THREE.Vector3(), []);
+  const isDragging = useRef(false);
+  const activeHandle = useRef<RoomResizeHandle | "move" | null>(null);
+  const dragOffset = useRef(new THREE.Vector3());
+  const startRoom = useRef({
+    x: center.x,
+    z: center.z,
+    width: dimensions.width,
+    depth: dimensions.depth,
+  });
+
+  const handlePositions: Array<{ id: RoomResizeHandle; position: [number, number, number]; scale: [number, number, number] }> = [
+    { id: "north", position: [0, 0.16, -dimensions.depth / 2], scale: [1.28, 0.12, 0.24] },
+    { id: "south", position: [0, 0.16, dimensions.depth / 2], scale: [1.28, 0.12, 0.24] },
+    { id: "west", position: [-dimensions.width / 2, 0.16, 0], scale: [0.24, 0.12, 1.28] },
+    { id: "east", position: [dimensions.width / 2, 0.16, 0], scale: [0.24, 0.12, 1.28] },
+    { id: "northWest", position: [-dimensions.width / 2, 0.18, -dimensions.depth / 2], scale: [0.42, 0.14, 0.42] },
+    { id: "northEast", position: [dimensions.width / 2, 0.18, -dimensions.depth / 2], scale: [0.42, 0.14, 0.42] },
+    { id: "southWest", position: [-dimensions.width / 2, 0.18, dimensions.depth / 2], scale: [0.42, 0.14, 0.42] },
+    { id: "southEast", position: [dimensions.width / 2, 0.18, dimensions.depth / 2], scale: [0.42, 0.14, 0.42] },
+  ];
+
+  function beginDrag(
+    event: ThreeEvent<PointerEvent>,
+    handle: RoomResizeHandle | "move",
+  ) {
+    event.stopPropagation();
+    onSelectRoom(roomIndex);
+    isDragging.current = true;
+    activeHandle.current = handle;
+    startRoom.current = {
+      x: center.x,
+      z: center.z,
+      width: dimensions.width,
+      depth: dimensions.depth,
+    };
+    dragOffset.current.set(event.point.x - center.x, 0, event.point.z - center.z);
+    const target = event.target as HTMLElement;
+    target.setPointerCapture?.(event.pointerId);
+  }
+
+  function patchFromBounds(west: number, east: number, north: number, south: number) {
+    const width = clamp(east - west, minRoomWidth, maxRoomWidth);
+    const depth = clamp(south - north, minRoomDepth, maxRoomDepth);
+
+    onUpdateRoom(roomIndex, {
+      x: (west + east) / 2,
+      z: (north + south) / 2,
+      width,
+      depth,
+    });
+  }
+
+  function drag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current || !activeHandle.current || !event.ray.intersectPlane(dragPlane, dragPoint)) {
+      return;
+    }
+
+    event.stopPropagation();
+    const freeMove = event.altKey;
+    const start = startRoom.current;
+
+    if (activeHandle.current === "move") {
+      onUpdateRoom(roomIndex, {
+        x: snapEditValue(dragPoint.x - dragOffset.current.x, freeMove),
+        z: snapEditValue(dragPoint.z - dragOffset.current.z, freeMove),
+      });
+      return;
+    }
+
+    let west = start.x - start.width / 2;
+    let east = start.x + start.width / 2;
+    let north = start.z - start.depth / 2;
+    let south = start.z + start.depth / 2;
+    const x = snapEditValue(dragPoint.x, freeMove);
+    const z = snapEditValue(dragPoint.z, freeMove);
+    const handle = activeHandle.current;
+
+    if (handle === "west" || handle === "northWest" || handle === "southWest") {
+      west = clamp(x, east - maxRoomWidth, east - minRoomWidth);
+    }
+    if (handle === "east" || handle === "northEast" || handle === "southEast") {
+      east = clamp(x, west + minRoomWidth, west + maxRoomWidth);
+    }
+    if (handle === "north" || handle === "northWest" || handle === "northEast") {
+      north = clamp(z, south - maxRoomDepth, south - minRoomDepth);
+    }
+    if (handle === "south" || handle === "southWest" || handle === "southEast") {
+      south = clamp(z, north + minRoomDepth, north + maxRoomDepth);
+    }
+
+    patchFromBounds(west, east, north, south);
+  }
+
+  function stopDrag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    target.releasePointerCapture?.(event.pointerId);
+    isDragging.current = false;
+    activeHandle.current = null;
+  }
+
+  return (
+    <group>
+      <Html position={[0, 0.42, -dimensions.depth / 2 - 0.75]} center className="room-dimension-label">
+        {dimensions.width.toFixed(1)}m x {dimensions.depth.toFixed(1)}m
+      </Html>
+      <mesh
+        position={[0, 0.2, 0]}
+        onPointerDown={(event) => beginDrag(event, "move")}
+        onPointerMove={drag}
+        onPointerUp={stopDrag}
+        onPointerCancel={stopDrag}
+      >
+        <boxGeometry args={[1.1, 0.16, 1.1]} />
+        <meshBasicMaterial color="#314f43" transparent opacity={0.62} />
+      </mesh>
+      {handlePositions.map((handle) => (
+        <mesh
+          key={handle.id}
+          position={handle.position}
+          onPointerDown={(event) => beginDrag(event, handle.id)}
+          onPointerMove={drag}
+          onPointerUp={stopDrag}
+          onPointerCancel={stopDrag}
+        >
+          <boxGeometry args={handle.scale} />
+          <meshBasicMaterial color="#f6c453" transparent opacity={0.86} />
+        </mesh>
+      ))}
+    </group>
+  );
 }
 
 function Room({
@@ -1351,6 +1605,7 @@ function Room({
       editorViewMode !== "topdown" ||
       transformTool !== "move" ||
       pendingPlacementImageId ||
+      !isSelected ||
       !event.shiftKey
     ) {
       return;
@@ -1403,6 +1658,15 @@ function Room({
           <boxGeometry args={[dimensions.width, 0.035, dimensions.depth]} />
           <meshBasicMaterial color="#f6c453" transparent opacity={0.16} />
         </mesh>
+      ) : null}
+      {isSelected && isEditMode && editorViewMode === "topdown" && !pendingPlacementImageId ? (
+        <RoomEditHandles
+          roomIndex={roomIndex}
+          center={center}
+          dimensions={dimensions}
+          onSelectRoom={onSelectRoom}
+          onUpdateRoom={onUpdateRoom}
+        />
       ) : null}
       <mesh position={[0, dimensions.height, 0]} rotation={[Math.PI / 2, 0, 0]}>
         <planeGeometry args={[dimensions.width, dimensions.depth]} />
@@ -1494,11 +1758,11 @@ function SelectedWallDragSurface({
   const totalWidth = bounds.maxX - bounds.minX + 4;
 
   function moveWall(event: ThreeEvent<PointerEvent>) {
-    const roomX = roomOffset(room, wall.roomIndex);
+    const roomCenter = getRoomCenter(room, wall.roomIndex);
 
     onUpdateCustomWall(wall.id, {
-      x: event.point.x - dragOffset.current.x - roomX,
-      z: event.point.z - dragOffset.current.z,
+      x: event.point.x - dragOffset.current.x - roomCenter.x,
+      z: event.point.z - dragOffset.current.z - roomCenter.z,
     });
   }
 
@@ -1511,10 +1775,11 @@ function SelectedWallDragSurface({
     isDragging.current = true;
     const target = event.target as HTMLElement;
     target.setPointerCapture?.(event.pointerId);
+    const roomCenter = getRoomCenter(room, wall.roomIndex);
     dragOffset.current.set(
-      event.point.x - (roomOffset(room, wall.roomIndex) + wall.x),
+      event.point.x - (roomCenter.x + wall.x),
       0,
-      event.point.z - wall.z,
+      event.point.z - (roomCenter.z + wall.z),
     );
     moveWall(event);
   }
@@ -1540,14 +1805,14 @@ function SelectedWallDragSurface({
 
   return (
     <mesh
-      position={[centerX, 0.14, 0]}
+      position={[centerX, 0.14, (bounds.minZ + bounds.maxZ) / 2]}
       rotation={[-Math.PI / 2, 0, 0]}
       onPointerDown={startDrag}
       onPointerMove={drag}
       onPointerUp={stopDrag}
       onPointerCancel={stopDrag}
     >
-      <planeGeometry args={[totalWidth, bounds.maxDepth + 4]} />
+      <planeGeometry args={[totalWidth, bounds.depth + 4]} />
       <meshBasicMaterial transparent opacity={0.01} depthWrite={false} />
     </mesh>
   );
@@ -1593,11 +1858,11 @@ function SelectedWallDomDrag({
       }
 
       const currentWall = wallRef.current;
-      const roomX = roomOffset(room, currentWall.roomIndex);
+      const roomCenter = getRoomCenter(room, currentWall.roomIndex);
 
       onUpdateCustomWall(currentWall.id, {
-        x: hitPoint.x - dragOffset.current.x - roomX,
-        z: hitPoint.z - dragOffset.current.z,
+        x: hitPoint.x - dragOffset.current.x - roomCenter.x,
+        z: hitPoint.z - dragOffset.current.z - roomCenter.z,
       });
     }
 
@@ -1611,10 +1876,11 @@ function SelectedWallDomDrag({
       isDragging.current = true;
       if (getHit(event)) {
         const currentWall = wallRef.current;
+        const roomCenter = getRoomCenter(room, currentWall.roomIndex);
         dragOffset.current.set(
-          hitPoint.x - (roomOffset(room, currentWall.roomIndex) + currentWall.x),
+          hitPoint.x - (roomCenter.x + currentWall.x),
           0,
-          hitPoint.z - currentWall.z,
+          hitPoint.z - (roomCenter.z + currentWall.z),
         );
       }
       updateFromEvent(event);
@@ -1743,13 +2009,14 @@ function FirstPersonAimFollower({
       if (!wall) {
         return;
       }
+      const wallRoomCenter = getRoomCenter(room, wall.roomIndex);
 
       const nextX = THREE.MathUtils.lerp(
         wall.x,
-        hitPoint.x - roomOffset(room, wall.roomIndex),
+        hitPoint.x - wallRoomCenter.x,
         0.18,
       );
-      const nextZ = THREE.MathUtils.lerp(wall.z, hitPoint.z, 0.18);
+      const nextZ = THREE.MathUtils.lerp(wall.z, hitPoint.z - wallRoomCenter.z, 0.18);
 
       onUpdateCustomWall(selectedWallId, {
         x: nextX,
@@ -1791,6 +2058,182 @@ function FirstPersonAimFollower({
       });
     }
   });
+
+  return null;
+}
+
+function TopdownGrabFollower({
+  enabled,
+  selectedObject,
+  room,
+  customWalls,
+  layouts,
+  images,
+  onUpdateRoom,
+  onUpdateImageLayout,
+  onUpdateCustomWall,
+  onUpdateDoor,
+}: {
+  enabled: boolean;
+  selectedObject: SelectedEditableObject | null;
+  room: GalleryRoomConfig;
+  customWalls: GalleryCustomWall[];
+  layouts: GalleryLayouts;
+  images: GalleryImage[];
+  onUpdateRoom: (roomIndex: number, patch: Partial<GalleryRoomDimensions>) => void;
+  onUpdateImageLayout: (id: string, patch: Partial<GalleryFrameLayout>) => void;
+  onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
+  onUpdateDoor: (id: string, patch: Partial<GalleryDoor>) => void;
+}) {
+  const { camera, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const pointer = useMemo(() => new THREE.Vector2(), []);
+  const floorPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const hitPoint = useMemo(() => new THREE.Vector3(), []);
+  const dragOffset = useRef(new THREE.Vector3());
+  const isDragging = useRef(false);
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+
+    function getFloorHit(event: PointerEvent) {
+      const rect = canvas.getBoundingClientRect();
+      pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(pointer, camera);
+
+      return raycaster.ray.intersectPlane(floorPlane, hitPoint);
+    }
+
+    function updateSelectedObject(event: PointerEvent) {
+      if (!selectedObject || !getFloorHit(event)) {
+        return;
+      }
+
+      if (selectedObject.type === "room") {
+        onUpdateRoom(selectedObject.roomIndex, {
+          x: hitPoint.x - dragOffset.current.x,
+          z: hitPoint.z - dragOffset.current.z,
+        });
+        return;
+      }
+
+      if (selectedObject.type === "wall") {
+        const wall = customWalls.find((item) => item.id === selectedObject.id);
+        if (!wall) {
+          return;
+        }
+
+        const roomCenter = getRoomCenter(room, wall.roomIndex);
+        onUpdateCustomWall(selectedObject.id, {
+          x: hitPoint.x - dragOffset.current.x - roomCenter.x,
+          z: hitPoint.z - dragOffset.current.z - roomCenter.z,
+        });
+        return;
+      }
+
+      const wallPlacement = getClosestWallPlacement(room, customWalls, hitPoint);
+      if (!wallPlacement) {
+        return;
+      }
+
+      if (selectedObject.type === "door") {
+        onUpdateDoor(selectedObject.id, {
+          wall: wallPlacement.wall,
+          offset: wallPlacement.offset,
+        });
+        return;
+      }
+
+      const imageIndex = images.findIndex((image) => image.id === selectedObject.id);
+      const image = images[imageIndex];
+      if (!image) {
+        return;
+      }
+
+      const currentLayout = layouts[selectedObject.id] ?? getDefaultLayout(image, imageIndex, room);
+      onUpdateImageLayout(selectedObject.id, {
+        wall: wallPlacement.wall,
+        offset: wallPlacement.offset,
+        height: currentLayout.height,
+      });
+    }
+
+    function startDrag(event: PointerEvent) {
+      if (!enabled || !selectedObject || event.button !== 0 || event.target !== canvas) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      isDragging.current = true;
+      canvas.setPointerCapture(event.pointerId);
+
+      if (getFloorHit(event)) {
+        if (selectedObject.type === "room") {
+          const center = getRoomCenter(room, selectedObject.roomIndex);
+          dragOffset.current.set(hitPoint.x - center.x, 0, hitPoint.z - center.z);
+        } else if (selectedObject.type === "wall") {
+          const wall = customWalls.find((item) => item.id === selectedObject.id);
+          const roomCenter = wall ? getRoomCenter(room, wall.roomIndex) : { x: 0, z: 0 };
+          dragOffset.current.set(
+            wall ? hitPoint.x - (roomCenter.x + wall.x) : 0,
+            0,
+            wall ? hitPoint.z - (roomCenter.z + wall.z) : 0,
+          );
+        } else {
+          dragOffset.current.set(0, 0, 0);
+        }
+      }
+
+      updateSelectedObject(event);
+    }
+
+    function drag(event: PointerEvent) {
+      if (!isDragging.current) {
+        return;
+      }
+
+      event.preventDefault();
+      updateSelectedObject(event);
+    }
+
+    function stopDrag(event: PointerEvent) {
+      if (canvas.hasPointerCapture(event.pointerId)) {
+        canvas.releasePointerCapture(event.pointerId);
+      }
+      isDragging.current = false;
+    }
+
+    canvas.addEventListener("pointerdown", startDrag, true);
+    window.addEventListener("pointermove", drag);
+    window.addEventListener("pointerup", stopDrag);
+    window.addEventListener("pointercancel", stopDrag);
+
+    return () => {
+      canvas.removeEventListener("pointerdown", startDrag, true);
+      window.removeEventListener("pointermove", drag);
+      window.removeEventListener("pointerup", stopDrag);
+      window.removeEventListener("pointercancel", stopDrag);
+    };
+  }, [
+    camera,
+    customWalls,
+    enabled,
+    floorPlane,
+    gl,
+    hitPoint,
+    images,
+    layouts,
+    onUpdateCustomWall,
+    onUpdateDoor,
+    onUpdateImageLayout,
+    onUpdateRoom,
+    pointer,
+    raycaster,
+    room,
+    selectedObject,
+  ]);
 
   return null;
 }
@@ -2166,7 +2609,7 @@ function Wall({
             onClick={onClick}
             userData={editableTarget ? { editableTarget } : undefined}
           >
-            <boxGeometry args={[piece.width, piece.height, 0.18]} />
+            <boxGeometry args={[piece.width, piece.height, wallDepth]} />
             <meshStandardMaterial color="#e7e1d3" roughness={0.88} side={THREE.DoubleSide} />
           </mesh>
         ))}
@@ -2183,7 +2626,7 @@ function Wall({
       onClick={onClick}
       userData={editableTarget ? { editableTarget } : undefined}
     >
-      <boxGeometry args={[length, height, 0.18]} />
+      <boxGeometry args={[length, height, wallDepth]} />
       <meshStandardMaterial color="#e7e1d3" roughness={0.88} side={THREE.DoubleSide} />
     </mesh>
   );
@@ -2214,11 +2657,12 @@ function CustomWall({
   onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
 }) {
-  const xOffset = roomOffset(room, wall.roomIndex);
+  const wallRoomCenter = getRoomCenter(room, wall.roomIndex);
   const wallGroupRef = useRef<THREE.Group>(null);
   const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
   const dragPoint = useMemo(() => new THREE.Vector3(), []);
   const isDragging = useRef(false);
+  const activeEndpointHandle = useRef<WallEndpointHandle | null>(null);
   const openings = useMemo(() => getCustomWallOpenings(wall, doors), [doors, wall]);
   const wallPieces = useMemo(() => {
     const sortedOpenings = openings
@@ -2323,14 +2767,18 @@ function CustomWall({
       !isEditMode ||
       pendingPlacementImageId ||
       editorViewMode !== "topdown" ||
-      transformTool !== "move" ||
-      !event.shiftKey
+      transformTool !== "move"
     ) {
       return;
     }
 
     event.stopPropagation();
     selectWall();
+
+    if (!event.shiftKey) {
+      return;
+    }
+
     isDragging.current = true;
     const target = event.target as HTMLElement;
     target.setPointerCapture?.(event.pointerId);
@@ -2343,8 +2791,8 @@ function CustomWall({
 
     event.stopPropagation();
     onUpdateCustomWall(wall.id, {
-      x: dragPoint.x - xOffset,
-      z: dragPoint.z,
+      x: dragPoint.x - wallRoomCenter.x,
+      z: dragPoint.z - wallRoomCenter.z,
     });
   }
 
@@ -2358,10 +2806,59 @@ function CustomWall({
     isDragging.current = false;
   }
 
+  function dragEndpoint(event: ThreeEvent<PointerEvent>, handle: WallEndpointHandle) {
+    if (
+      !isEditMode ||
+      pendingPlacementImageId ||
+      editorViewMode !== "topdown" ||
+      transformTool !== "scale"
+    ) {
+      return;
+    }
+
+    if (activeEndpointHandle.current !== handle) {
+      return;
+    }
+
+    const local = wallGroupRef.current?.worldToLocal(event.point.clone());
+    if (!local) {
+      return;
+    }
+
+    event.stopPropagation();
+    selectWall();
+
+    const roomDimensions = getRoomDimensions(room, wall.roomIndex);
+    const minLength = 2;
+    const maxLength = roomDimensions.width - 0.6;
+    const fixedEndpoint = handle === "start" ? wall.length / 2 : -wall.length / 2;
+    const rawMovingEndpoint = snapEditValue(local.x, event.altKey);
+    const movingEndpoint =
+      handle === "start"
+        ? clamp(rawMovingEndpoint, fixedEndpoint - maxLength, fixedEndpoint - minLength)
+        : clamp(rawMovingEndpoint, fixedEndpoint + minLength, fixedEndpoint + maxLength);
+    const nextLength = Math.abs(fixedEndpoint - movingEndpoint);
+    const localCenterShift = (fixedEndpoint + movingEndpoint) / 2;
+    const axis = new THREE.Vector3(1, 0, 0).applyEuler(
+      new THREE.Euler(0, wall.rotation, 0, "XYZ"),
+    );
+    const nextCenter = new THREE.Vector3(
+      wallRoomCenter.x + wall.x,
+      0,
+      wallRoomCenter.z + wall.z,
+    ).addScaledVector(axis, localCenterShift);
+
+    onUpdateCustomWall(wall.id, {
+      x: nextCenter.x - wallRoomCenter.x,
+      z: nextCenter.z - wallRoomCenter.z,
+      length: nextLength,
+    });
+  }
+
   return (
     <group
       ref={wallGroupRef}
-      position={[xOffset + wall.x, wall.height / 2, wall.z]}
+      position={[wallRoomCenter.x + wall.x, wall.height / 2, wallRoomCenter.z + wall.z]}
       rotation={[0, wall.rotation, 0]}
     >
       {isSelected ? (
@@ -2389,7 +2886,7 @@ function CustomWall({
         </>
       ) : null}
       <mesh
-        position={[0, 0, wallSurfaceOffset + 0.006]}
+        position={[0, 0, customWallPlacementOffset]}
         onClick={(event) => handleClick(event, frontTarget)}
         userData={{ editableTarget: frontTarget }}
       >
@@ -2397,7 +2894,7 @@ function CustomWall({
         <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
       </mesh>
       <mesh
-        position={[0, 0, -wallSurfaceOffset - 0.006]}
+        position={[0, 0, -customWallPlacementOffset]}
         rotation={[0, Math.PI, 0]}
         onClick={(event) => handleClick(event, backTarget)}
         userData={{ editableTarget: backTarget }}
@@ -2457,6 +2954,40 @@ function CustomWall({
           />
         </mesh>
       ) : null}
+      {isSelected && isEditMode && editorViewMode === "topdown" && transformTool === "scale" && !pendingPlacementImageId ? (
+        <>
+          {[
+            ["start", -wall.length / 2],
+            ["end", wall.length / 2],
+          ].map(([handle, x]) => (
+            <mesh
+              key={handle}
+              position={[x as number, -wall.height / 2 + 0.16, 0]}
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                selectWall();
+                activeEndpointHandle.current = handle as WallEndpointHandle;
+                const target = event.target as HTMLElement;
+                target.setPointerCapture?.(event.pointerId);
+              }}
+              onPointerMove={(event) => dragEndpoint(event, handle as WallEndpointHandle)}
+              onPointerUp={(event) => {
+                const target = event.target as HTMLElement;
+                target.releasePointerCapture?.(event.pointerId);
+                activeEndpointHandle.current = null;
+              }}
+              onPointerCancel={(event) => {
+                const target = event.target as HTMLElement;
+                target.releasePointerCapture?.(event.pointerId);
+                activeEndpointHandle.current = null;
+              }}
+            >
+              <boxGeometry args={[0.44, 0.22, 0.54]} />
+              <meshBasicMaterial color="#f6c453" transparent opacity={0.9} />
+            </mesh>
+          ))}
+        </>
+      ) : null}
     </group>
   );
 }
@@ -2510,12 +3041,17 @@ function Door({
   const leafHeight = Math.max(0.8, door.height - 0.1);
 
   function startDrag(event: ThreeEvent<PointerEvent>) {
-    if (!isEditMode || editorViewMode !== "topdown" || transformTool !== "move" || !wallBasis || !event.shiftKey) {
+    if (!isEditMode || editorViewMode !== "topdown" || transformTool !== "move" || !wallBasis) {
       return;
     }
 
     event.stopPropagation();
     onSelectDoor(door.id);
+
+    if (!event.shiftKey) {
+      return;
+    }
+
     isDragging.current = true;
     const target = event.target as HTMLElement;
     target.setPointerCapture?.(event.pointerId);
@@ -2640,6 +3176,10 @@ function Door({
             position={[leafWidth / 2 + 0.05, -0.01, 0]}
             castShadow
             onClick={handleClick}
+            onPointerDown={startDrag}
+            onPointerMove={drag}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
             userData={{ editableTarget }}
           >
             <boxGeometry args={[leafWidth, leafHeight, 0.1]} />
@@ -2648,6 +3188,10 @@ function Door({
           <mesh
             position={[door.width * 0.82, 0.02, 0.08]}
             onClick={handleClick}
+            onPointerDown={startDrag}
+            onPointerMove={drag}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
             userData={{ editableTarget }}
           >
             <sphereGeometry args={[0.055, 12, 12]} />
@@ -2841,7 +3385,9 @@ function Artwork({
   isSelected,
   isEditable,
   editorViewMode,
+  transformTool,
   onSelect,
+  onUpdateLayout,
 }: {
   image: GalleryImage;
   layout: GalleryFrameLayout;
@@ -2851,10 +3397,11 @@ function Artwork({
   isSelected: boolean;
   isEditable: boolean;
   editorViewMode: EditorViewMode;
+  transformTool: EditorTransformTool;
   onSelect: () => void;
+  onUpdateLayout: (id: string, patch: Partial<GalleryFrameLayout>) => void;
 }) {
   const wallBasis = getWallBasis(room, layout.wall, customWalls);
-  const customTarget = parseCustomWallTarget(layout.wall, customWalls);
   const texture = useLoader(THREE.TextureLoader, image.url);
   const aspect = image.width / image.height || 1.42;
   const width = layout.width;
@@ -2862,7 +3409,10 @@ function Artwork({
   const frameOuterWidth = width + 0.28;
   const frameOuterHeight = height + 0.28;
   const selectionSize = 0.045;
-  const artworkZ = customTarget ? -0.004 : 0;
+  const artworkZ = 0;
+  const dragPoint = useMemo(() => new THREE.Vector3(), []);
+  const isDragging = useRef(false);
+  const hasDragged = useRef(false);
 
   useMemo(() => {
     texture.colorSpace = THREE.SRGBColorSpace;
@@ -2888,10 +3438,66 @@ function Artwork({
     }
 
     event.stopPropagation();
+    if (hasDragged.current) {
+      hasDragged.current = false;
+      return;
+    }
+
     if (editorViewMode === "firstPerson") {
       return;
     }
     onSelect();
+  }
+
+  function startDrag(event: ThreeEvent<PointerEvent>) {
+    if (!isEditable || editorViewMode !== "topdown" || transformTool !== "move" || !wallBasis) {
+      return;
+    }
+
+    event.stopPropagation();
+    onSelect();
+
+    if (!event.shiftKey) {
+      return;
+    }
+
+    isDragging.current = true;
+    hasDragged.current = false;
+    const target = event.target as HTMLElement;
+    target.setPointerCapture?.(event.pointerId);
+  }
+
+  function drag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current || !wallBasis) {
+      return;
+    }
+
+    const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(
+      wallBasis.normal,
+      wallBasis.position,
+    );
+
+    if (!event.ray.intersectPlane(plane, dragPoint)) {
+      return;
+    }
+
+    event.stopPropagation();
+    hasDragged.current = true;
+    const local = dragPoint.clone().sub(wallBasis.position);
+    onUpdateLayout(image.id, {
+      offset: local.dot(wallBasis.axis),
+      height: dragPoint.y,
+    });
+  }
+
+  function stopDrag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    target.releasePointerCapture?.(event.pointerId);
+    isDragging.current = false;
   }
 
   return (
@@ -2925,16 +3531,36 @@ function Artwork({
             position={[0, 0, artworkFrameDepth / 2]}
             castShadow
             onClick={handleClick}
+            onPointerDown={startDrag}
+            onPointerMove={drag}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
             userData={{ editableTarget }}
           >
             <boxGeometry args={[frameOuterWidth, frameOuterHeight, artworkFrameDepth]} />
             <meshStandardMaterial color="#2f2a22" roughness={0.45} />
           </mesh>
-          <mesh position={[0, 0, artworkFrameDepth + 0.006]} onClick={handleClick} userData={{ editableTarget }}>
+          <mesh
+            position={[0, 0, artworkFrameDepth + 0.006]}
+            onClick={handleClick}
+            onPointerDown={startDrag}
+            onPointerMove={drag}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
+            userData={{ editableTarget }}
+          >
             <planeGeometry args={[width + 0.1, height + 0.1]} />
             <meshStandardMaterial color="#f7f1e4" roughness={0.72} />
           </mesh>
-          <mesh position={[0, 0, artworkFrameDepth + 0.012]} onClick={handleClick} userData={{ editableTarget }}>
+          <mesh
+            position={[0, 0, artworkFrameDepth + 0.012]}
+            onClick={handleClick}
+            onPointerDown={startDrag}
+            onPointerMove={drag}
+            onPointerUp={stopDrag}
+            onPointerCancel={stopDrag}
+            userData={{ editableTarget }}
+          >
             <planeGeometry args={[width, height]} />
             <meshBasicMaterial map={texture} toneMapped={false} />
           </mesh>
@@ -3021,6 +3647,7 @@ export default function GalleryScene({
   selectedWallId,
   selectedDoorId,
   selectedRoomIndex,
+  selectedObject,
   onSelectImage,
   onSelectWall,
   onSelectDoor,
@@ -3146,15 +3773,41 @@ export default function GalleryScene({
             isSelected={isEditMode && selectedImageId === image.id}
             isEditable={isEditMode}
             editorViewMode={editorViewMode}
+            transformTool={transformTool}
             onSelect={() => onSelectImage(image.id)}
+            onUpdateLayout={onUpdateImageLayout}
           />
         ))
       ) : (
         <EmptyFrames count={6} room={sceneRoomConfig} customWalls={customWalls} doors={doors} />
       )}
+      <FirstPersonLookControls
+        mode={mode}
+        mouseSensitivity={editorSettings.mouseSensitivity}
+        enabled={!useTopdownEditor}
+      />
+      <PlayerMovement
+        room={sceneRoomConfig}
+        settings={editorSettings}
+        doors={doors}
+        customWalls={customWalls}
+        enabled={!useTopdownEditor}
+      />
       {useTopdownEditor ? (
         <>
-          <EditorCameraControls room={sceneRoomConfig} />
+          <EditorCameraControls room={sceneRoomConfig} isGrabActive={isGrabActive} />
+          <TopdownGrabFollower
+            enabled={isGrabActive && transformTool === "move" && !pendingPlacementImageId}
+            selectedObject={selectedObject}
+            room={sceneRoomConfig}
+            customWalls={customWalls}
+            layouts={layouts}
+            images={images}
+            onUpdateRoom={onUpdateRoom}
+            onUpdateImageLayout={onUpdateImageLayout}
+            onUpdateCustomWall={onUpdateCustomWall}
+            onUpdateDoor={onUpdateDoor}
+          />
           <TopdownBuilderPlacementTracker
             isEditMode={isEditMode}
             editorViewMode={editorViewMode}
@@ -3164,16 +3817,6 @@ export default function GalleryScene({
         </>
       ) : (
         <>
-          <FirstPersonLookControls
-            mode={mode}
-            mouseSensitivity={editorSettings.mouseSensitivity}
-          />
-          <PlayerMovement
-            room={sceneRoomConfig}
-            settings={editorSettings}
-            doors={doors}
-            customWalls={customWalls}
-          />
           {isEditMode ? (
             <>
               <FirstPersonEditorPicker

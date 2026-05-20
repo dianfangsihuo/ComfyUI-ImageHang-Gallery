@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { GalleryImage, UploadResult } from "../types";
+import { saveLocalGalleryImage } from "./localProjectStorage";
 
 const DATABASE_NAME = "image-hang-gallery";
 const DATABASE_VERSION = 1;
@@ -206,6 +207,21 @@ export async function createGalleryImage(file: File): Promise<UploadResult> {
     height,
     createdAt: new Date().toISOString(),
   };
+  const localProjectUrl = await saveLocalGalleryImage(file, baseImage.id);
+
+  if (localProjectUrl) {
+    const image: GalleryImage = {
+      ...baseImage,
+      url: localProjectUrl,
+      source: "local",
+    };
+
+    await putStoredImage(image);
+
+    return {
+      image,
+    };
+  }
 
   if (isSupabaseConfigured()) {
     try {

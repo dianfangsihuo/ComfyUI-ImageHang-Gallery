@@ -9,6 +9,7 @@ import {
   Pencil,
   RotateCcw,
   Ruler,
+  Save,
   Trash2,
   UploadCloud,
 } from "lucide-react";
@@ -41,6 +42,11 @@ import {
   saveStoredLayouts,
   saveStoredRoomConfig,
 } from "./lib/layoutStorage";
+import {
+  loadLocalGalleryState,
+  saveLocalGalleryState,
+  type LocalGalleryState,
+} from "./lib/localProjectStorage";
 import { createSampleImages } from "./lib/sampleArt";
 import type {
   AppMode,
@@ -65,6 +71,18 @@ type EditableSelection =
   | { type: "wall"; id: string }
   | { type: "door"; id: string }
   | { type: "room"; roomIndex: number };
+
+type EditSnapshot = {
+  layouts: GalleryLayouts;
+  roomConfig: GalleryRoomConfig;
+  customWalls: GalleryCustomWall[];
+  doors: GalleryDoor[];
+  selectedImageId: string | null;
+  selectedWallId: string | null;
+  selectedDoorId: string | null;
+  selectedRoomIndex: number;
+  selectedObject: EditableSelection | null;
+};
 
 const shortcutLabels: Record<EditorShortcutAction, string> = {
   openMarket: "打开组件市场",
@@ -313,6 +331,50 @@ function formatKeyCode(code: string) {
   return labels[code] ?? code;
 }
 
+function getLocalGalleryState(state: LocalGalleryState): LocalGalleryState {
+  return {
+    images: state.images,
+    layouts: state.layouts,
+    roomConfig: state.roomConfig,
+    customWalls: state.customWalls,
+    doors: state.doors,
+    editorSettings: state.editorSettings,
+  };
+}
+
+function hasLocalGalleryContent(state: LocalGalleryState) {
+  return (
+    state.images.length > 0 ||
+    state.customWalls.length > 0 ||
+    state.doors.length > 0 ||
+    Object.keys(state.layouts).length > 0 ||
+    JSON.stringify(state.roomConfig) !== JSON.stringify(defaultRoomConfig)
+  );
+}
+
+function isTextEditingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable || target.closest("[contenteditable='true']")) {
+    return true;
+  }
+
+  const input = target.closest("input, textarea") as HTMLInputElement | HTMLTextAreaElement | null;
+  if (!input) {
+    return false;
+  }
+
+  if (input instanceof HTMLTextAreaElement) {
+    return true;
+  }
+
+  return !["button", "checkbox", "color", "file", "radio", "range", "reset", "submit"].includes(
+    input.type,
+  );
+}
+
 function clampSetting(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
@@ -389,13 +451,27 @@ function App() {
   const [isComponentMarketOpen, setIsComponentMarketOpen] = useState(false);
   const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
-  const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("topdown");
+  const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("firstPerson");
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
+  const [isSavingLocal, setIsSavingLocal] = useState(false);
+  const [isProjectStorageReady, setIsProjectStorageReady] = useState(false);
   const [message, setMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<GalleryImage[]>([]);
+  const hasLoadedLocalProjectRef = useRef(false);
+  const historyRef = useRef<{
+    past: EditSnapshot[];
+    future: EditSnapshot[];
+    lastKey: string | null;
+    lastTime: number;
+  }>({
+    past: [],
+    future: [],
+    lastKey: null,
+    lastTime: 0,
+  });
   const samples = useMemo(() => createSampleImages(), []);
   const sceneImages = images.length > 0 ? images : samples;
   const placedSceneImages = sceneImages.filter(
@@ -432,7 +508,10 @@ function App() {
       setSelectedDoorId(null);
       setSelectedObject(null);
       setIsGrabActive(false);
+      return;
     }
+
+    setEditorViewMode("firstPerson");
   }
 
   function selectArtwork(id: string) {
@@ -456,6 +535,83 @@ function App() {
     setSelectedWallId(null);
   }
 
+  function getEditSnapshot(): EditSnapshot {
+    return structuredClone({
+      layouts,
+      roomConfig,
+      customWalls,
+      doors,
+      selectedImageId,
+      selectedWallId,
+      selectedDoorId,
+      selectedRoomIndex,
+      selectedObject,
+    });
+  }
+
+  function applyEditSnapshot(snapshot: EditSnapshot) {
+    setLayouts(snapshot.layouts);
+    setRoomConfig(snapshot.roomConfig);
+    setCustomWalls(snapshot.customWalls);
+    setDoors(snapshot.doors);
+    setSelectedImageId(snapshot.selectedImageId);
+    setSelectedWallId(snapshot.selectedWallId);
+    setSelectedDoorId(snapshot.selectedDoorId);
+    setSelectedRoomIndex(snapshot.selectedRoomIndex);
+    setSelectedObject(snapshot.selectedObject);
+    setIsGrabActive(false);
+  }
+
+  function recordEditHistory(key: string) {
+    const history = historyRef.current;
+    const now = performance.now();
+
+    if (history.lastKey === key && now - history.lastTime < 1200) {
+      history.lastTime = now;
+      return;
+    }
+
+    history.past.push(getEditSnapshot());
+    if (history.past.length > 80) {
+      history.past.shift();
+    }
+    history.future = [];
+    history.lastKey = key;
+    history.lastTime = now;
+  }
+
+  function undoEdit() {
+    const history = historyRef.current;
+    const previous = history.past.pop();
+
+    if (!previous) {
+      setMessage("没有可撤销的编辑");
+      return;
+    }
+
+    history.future.push(getEditSnapshot());
+    history.lastKey = null;
+    history.lastTime = 0;
+    applyEditSnapshot(previous);
+    setMessage("已撤销");
+  }
+
+  function redoEdit() {
+    const history = historyRef.current;
+    const next = history.future.pop();
+
+    if (!next) {
+      setMessage("没有可重做的编辑");
+      return;
+    }
+
+    history.past.push(getEditSnapshot());
+    history.lastKey = null;
+    history.lastTime = 0;
+    applyEditSnapshot(next);
+    setMessage("已重做");
+  }
+
   function selectRoom(roomIndex: number) {
     setSelectedObject({ type: "room", roomIndex });
     setSelectedRoomIndex(roomIndex);
@@ -467,24 +623,56 @@ function App() {
   useEffect(() => {
     let isMounted = true;
 
-    void loadStoredImages()
-      .then((storedImages) => {
+    async function loadGallery() {
+      try {
+        const localState = await loadLocalGalleryState();
+
+        if (!isMounted) {
+          localState?.images.forEach(revokeImageUrl);
+          return;
+        }
+
+        if (localState) {
+          hasLoadedLocalProjectRef.current = true;
+          const hasEphemeralImages = localState.images.some((image) => image.url.startsWith("blob:"));
+          const storedImages = hasEphemeralImages ? await loadStoredImages() : [];
+          const storedById = new Map(storedImages.map((image) => [image.id, image]));
+          const nextState = getLocalGalleryState({
+            ...localState,
+            images: localState.images.map((image) =>
+              image.url.startsWith("blob:") ? storedById.get(image.id) ?? image : image,
+            ),
+          });
+          setImages(nextState.images);
+          setLayouts(nextState.layouts);
+          setRoomConfig(nextState.roomConfig);
+          setCustomWalls(nextState.customWalls);
+          setDoors(nextState.doors);
+          setEditorSettings(nextState.editorSettings);
+          setMessage(hasEphemeralImages ? "已读取本地项目，并准备迁移图片文件" : "已读取本地项目保存");
+          return;
+        }
+
+        const storedImages = await loadStoredImages();
+
         if (isMounted) {
           setImages(storedImages);
         } else {
           storedImages.forEach(revokeImageUrl);
         }
-      })
-      .catch(() => {
+      } catch {
         if (isMounted) {
           setMessage("读取本地画廊失败");
         }
-      })
-      .finally(() => {
+      } finally {
         if (isMounted) {
+          setIsProjectStorageReady(true);
           setIsLoading(false);
         }
-      });
+      }
+    }
+
+    void loadGallery();
 
     return () => {
       isMounted = false;
@@ -516,6 +704,45 @@ function App() {
   }, [editorSettings]);
 
   useEffect(() => {
+    if (!isProjectStorageReady) {
+      return;
+    }
+
+    const state = getLocalGalleryState({
+      images,
+      layouts,
+      roomConfig,
+      customWalls,
+      doors,
+      editorSettings,
+    });
+
+    if (!hasLoadedLocalProjectRef.current && !hasLocalGalleryContent(state)) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void saveLocalGalleryState(state).then((saved) => {
+        if (saved) {
+          hasLoadedLocalProjectRef.current = true;
+        }
+      });
+    }, 250);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [
+    customWalls,
+    doors,
+    editorSettings,
+    images,
+    isProjectStorageReady,
+    layouts,
+    roomConfig,
+  ]);
+
+  useEffect(() => {
     if (sceneImages.length === 0) {
       return;
     }
@@ -543,10 +770,10 @@ function App() {
   }, [customWalls, roomConfig, sceneImages]);
 
   useEffect(() => {
-    if (mode !== "edit" || editorViewMode !== "firstPerson" || transformTool !== "move") {
+    if (mode !== "edit" || transformTool !== "move") {
       setIsGrabActive(false);
     }
-  }, [editorViewMode, mode, transformTool]);
+  }, [mode, transformTool]);
 
   useEffect(() => {
     if (!selectedObject) {
@@ -638,6 +865,35 @@ function App() {
     });
   }
 
+  async function saveProjectNow() {
+    setIsSavingLocal(true);
+
+    try {
+      const saved = await saveLocalGalleryState(
+        getLocalGalleryState({
+          images,
+          layouts,
+          roomConfig,
+          customWalls,
+          doors,
+          editorSettings,
+        }),
+      );
+
+      if (saved) {
+        hasLoadedLocalProjectRef.current = true;
+        setIsProjectStorageReady(true);
+        setMessage("已保存到 .gallery-data/gallery.json");
+      } else {
+        setMessage("保存到本地文件失败，请确认开发服务器已重启");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存到本地文件失败");
+    } finally {
+      setIsSavingLocal(false);
+    }
+  }
+
   async function resetGallery() {
     const previousImages = images;
     await clearStoredImages();
@@ -661,6 +917,7 @@ function App() {
     setEditorSettings(defaultEditorSettings);
     setCapturingShortcut(null);
     setIsGrabActive(false);
+    historyRef.current = { past: [], future: [], lastKey: null, lastTime: 0 };
     setMessage("已恢复示例画廊");
   }
 
@@ -680,6 +937,7 @@ function App() {
       return;
     }
 
+    recordEditHistory(`layout:${id}`);
     setLayouts((current) => {
       const currentLayout =
         current[id] ?? layouts[id] ?? getDefaultLayout(image, Math.max(imageIndex, 0), roomConfig);
@@ -703,6 +961,7 @@ function App() {
   }
 
   function updateRoomConfig(patch: Partial<GalleryRoomConfig & GalleryRoomDimensions>) {
+    recordEditHistory("room-config");
     setRoomConfig((current) => {
       const roomCount = Math.round(clamp(patch.roomCount ?? current.roomCount, 1, 5));
       const rooms = getRoomList(current, roomCount).map((room, index) => {
@@ -775,6 +1034,7 @@ function App() {
   }
 
   function updateRoom(roomIndex: number, patch: Partial<GalleryRoomDimensions>) {
+    recordEditHistory(`room:${roomIndex}`);
     setRoomConfig((current) => {
       const rooms = getRoomList(current).map((room, index) =>
         index === roomIndex
@@ -868,13 +1128,61 @@ function App() {
       return;
     }
 
+    recordEditHistory("add-room");
     const nextRoomNumber = roomConfig.roomCount + 1;
+    const placementHint = getBuilderPlacement();
     setRoomConfig((current) => {
-      const template = getRoomDimensions(current, selectedRoomIndex);
+      const baseRoomIndex = clamp(placementHint.roomIndex, 0, current.roomCount - 1);
+      const template = getRoomDimensions(current, baseRoomIndex);
       const rooms = getRoomList(current);
-      const lastIndex = rooms.length - 1;
-      const lastRoom = rooms[lastIndex] ?? template;
-      const lastCenter = getRoomCenter(current, Math.max(0, lastIndex));
+      const baseCenter = getRoomCenter(current, baseRoomIndex);
+      const pointerWorld = {
+        x: baseCenter.x + placementHint.x,
+        z: baseCenter.z + placementHint.z,
+      };
+      const spacing = roomGap + 0.6;
+      const baseHalfWidth = template.width / 2;
+      const baseHalfDepth = template.depth / 2;
+      const nextHalfWidth = template.width / 2;
+      const nextHalfDepth = template.depth / 2;
+      const stepX = baseHalfWidth + nextHalfWidth + spacing;
+      const stepZ = baseHalfDepth + nextHalfDepth + spacing;
+      const directions = [
+        { x: 1, z: 0 },
+        { x: -1, z: 0 },
+        { x: 0, z: 1 },
+        { x: 0, z: -1 },
+        { x: 1, z: 1 },
+        { x: 1, z: -1 },
+        { x: -1, z: 1 },
+        { x: -1, z: -1 },
+      ];
+      const candidates = directions
+        .map((direction) => ({
+          x: baseCenter.x + direction.x * stepX,
+          z: baseCenter.z + direction.z * stepZ,
+        }))
+        .sort((a, b) => {
+          const distanceA = Math.hypot(a.x - pointerWorld.x, a.z - pointerWorld.z);
+          const distanceB = Math.hypot(b.x - pointerWorld.x, b.z - pointerWorld.z);
+
+          return distanceA - distanceB;
+        });
+      const overlapsRoom = (candidate: { x: number; z: number }) =>
+        rooms.some((existing, index) => {
+          const existingCenter = getRoomCenter(current, index);
+
+          return (
+            Math.abs(candidate.x - existingCenter.x) <
+              (template.width + existing.width) / 2 + roomGap &&
+            Math.abs(candidate.z - existingCenter.z) <
+              (template.depth + existing.depth) / 2 + roomGap
+          );
+        });
+      const placement = candidates.find((candidate) => !overlapsRoom(candidate)) ?? {
+        x: pointerWorld.x,
+        z: pointerWorld.z,
+      };
 
       return {
         ...current,
@@ -885,8 +1193,8 @@ function App() {
             width: template.width,
             depth: template.depth,
             height: template.height,
-            x: lastCenter.x + lastRoom.width / 2 + template.width / 2 + roomGap,
-            z: template.z ?? 0,
+            x: placement.x,
+            z: placement.z,
           },
         ],
       };
@@ -902,6 +1210,7 @@ function App() {
       return;
     }
 
+    recordEditHistory(`delete-room:${roomIndex}`);
     const removedWallIds = customWalls
       .filter((wall) => wall.roomIndex === roomIndex)
       .flatMap((wall) => [wall.id, customWallBackTarget(wall.id)]);
@@ -999,6 +1308,7 @@ function App() {
       rotation: 0,
     };
 
+    recordEditHistory("add-wall");
     setCustomWalls((current) => [...current, wall]);
     selectWall(wall.id);
     closeComponentMarket();
@@ -1006,6 +1316,7 @@ function App() {
   }
 
   function updateCustomWall(id: string, patch: Partial<GalleryCustomWall>) {
+    recordEditHistory(`wall:${id}`);
     setCustomWalls((current) =>
       current.map((wall) =>
         wall.id === id
@@ -1043,6 +1354,7 @@ function App() {
   function deleteCustomWall(id: string) {
     const backId = customWallBackTarget(id);
 
+    recordEditHistory(`delete-wall:${id}`);
     setCustomWalls((current) => current.filter((wall) => wall.id !== id));
     setDoors((current) => current.filter((door) => door.wall !== id && door.wall !== backId));
     setLayouts((current) =>
@@ -1081,6 +1393,7 @@ function App() {
       connectsToRoomIndex: roomConfig.roomCount > 1 ? (placement.roomIndex + 1) % roomConfig.roomCount : null,
     };
 
+    recordEditHistory("add-door");
     setDoors((current) => [...current, door]);
     selectDoor(door.id);
     closeComponentMarket();
@@ -1088,6 +1401,7 @@ function App() {
   }
 
   function updateDoor(id: string, patch: Partial<GalleryDoor>) {
+    recordEditHistory(`door:${id}`);
     setDoors((current) =>
       current.map((door) => {
         if (door.id !== id) {
@@ -1119,12 +1433,14 @@ function App() {
   }
 
   function toggleDoor(id: string) {
+    recordEditHistory(`door:${id}`);
     setDoors((current) =>
       current.map((door) => (door.id === id ? { ...door, isOpen: !door.isOpen } : door)),
     );
   }
 
   function deleteDoor(id: string) {
+    recordEditHistory(`delete-door:${id}`);
     setDoors((current) => current.filter((door) => door.id !== id));
     setSelectedObject(null);
     setSelectedDoorId(null);
@@ -1277,6 +1593,7 @@ function App() {
       return;
     }
 
+    recordEditHistory(`place-image:${imageId}`);
     const layout = normalizeFrameLayout(
       image,
       {
@@ -1332,13 +1649,47 @@ function App() {
         return;
       }
 
-      const target = event.target instanceof Element ? event.target : null;
-      const isTyping = Boolean(target?.closest("input, textarea, select"));
+      const isTyping = isTextEditingTarget(event.target);
       const isPointerLocked = document.pointerLockElement !== null;
       const isFirstPersonMovementKey =
         editorViewMode === "firstPerson" &&
         isPointerLocked &&
         ["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ShiftRight"].includes(event.code);
+
+      if (!isTyping && (event.ctrlKey || event.metaKey) && event.code === "KeyZ") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (event.shiftKey) {
+          redoEdit();
+        } else {
+          undoEdit();
+        }
+        return;
+      }
+
+      if (!isTyping && (event.ctrlKey || event.metaKey) && event.code === "KeyY") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        redoEdit();
+        return;
+      }
+
+      const deleteKeyPressed = event.code === "Delete" || event.code === "Backspace";
+      const configuredDeleteKeyPressed =
+        editorSettings.shortcuts.deleteSelection === event.code ||
+        (editorSettings.shortcuts.deleteSelection === "Delete" && event.key === "Delete") ||
+        (editorSettings.shortcuts.deleteSelection === "Backspace" && event.key === "Backspace");
+
+      if (
+        selectedObject &&
+        !isTyping &&
+        (deleteKeyPressed || configuredDeleteKeyPressed)
+      ) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        deleteSelectedObject();
+        return;
+      }
 
       if (isTyping && !isPointerLocked) {
         return;
@@ -1394,9 +1745,9 @@ function App() {
       }
 
       if (action === "grabSelection") {
-        if (selectedObject && editorViewMode === "firstPerson") {
+        if (selectedObject) {
           setTransformTool("move");
-          setIsGrabActive((current) => !current);
+          setIsGrabActive(true);
         }
         return;
       }
@@ -1441,10 +1792,18 @@ function App() {
       }
     };
 
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.code === editorSettings.shortcuts.grabSelection) {
+        setIsGrabActive(false);
+      }
+    };
+
     window.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("keyup", onKeyUp, true);
 
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
     };
   }, [
     mode,
@@ -1479,6 +1838,7 @@ function App() {
           selectedWallId={selectedWallId}
           selectedDoorId={selectedDoorId}
           selectedRoomIndex={selectedRoomIndex}
+          selectedObject={selectedObject}
           onSelectImage={selectArtwork}
           onSelectWall={selectWall}
           onSelectDoor={selectDoor}
@@ -1539,7 +1899,7 @@ function App() {
             <h1>私人画廊</h1>
           </div>
           <span className={supabaseReady ? "status online" : "status"}>
-            {supabaseReady ? "Supabase" : "Local"}
+            {supabaseReady ? "Supabase" : "本地文件"}
           </span>
         </div>
 
@@ -1604,6 +1964,16 @@ function App() {
           </button>
           <button
             type="button"
+            className="tool-button secondary"
+            onClick={() => void saveProjectNow()}
+            disabled={isSavingLocal || isLoading}
+            title="保存到项目目录 .gallery-data"
+          >
+            {isSavingLocal ? <Loader2 size={18} /> : <Save size={18} />}
+            <span>{isSavingLocal ? "保存中" : "保存到本地"}</span>
+          </button>
+          <button
+            type="button"
             className="icon-button"
             onClick={() => void resetGallery()}
             title="恢复示例"
@@ -1613,6 +1983,9 @@ function App() {
         </div>
 
         {message ? <p className="message">{message}</p> : null}
+        {isProjectStorageReady ? (
+          <p className="message subtle">自动保存已开启：.gallery-data/gallery.json</p>
+        ) : null}
 
         {mode === "edit" ? (
           <section className="editor-panel editor-hints" aria-label="Editor hints">
@@ -1652,7 +2025,11 @@ function App() {
                   : "先上传图片，再点击墙面定位"}
               </strong>
               <span>对象</span>
-              <strong>从组件市场添加房间、墙壁、门，再选择对象调整参数</strong>
+              <strong>
+                {editorViewMode === "topdown"
+                  ? "选中房间后拖中心柄移动，拖黄边/角改尺寸，按 Alt 临时关闭吸附"
+                  : "从组件市场添加房间、墙壁、门，再选择对象调整参数"}
+              </strong>
             </div>
             <div className="shortcut-grid" aria-label="Editor shortcuts">
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.openMarket)}</kbd> 组件市场</span>
@@ -1665,6 +2042,7 @@ function App() {
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.rotateLeft)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.rotateRight)}</kbd> 旋转墙壁</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.scaleUp)}</kbd><kbd>{formatKeyCode(editorSettings.shortcuts.scaleDown)}</kbd> 缩放</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.grabSelection)}</kbd> 抓取/释放</span>
+              <span><kbd>Ctrl Z</kbd><kbd>Ctrl Y</kbd> 撤销/重做</span>
               <span><kbd>{formatKeyCode(editorSettings.shortcuts.deleteSelection)}</kbd> 删除</span>
             </div>
           </section>
@@ -1704,7 +2082,7 @@ function App() {
               </button>
             </div>
 
-            {editorViewMode === "firstPerson" && transformTool === "move" ? (
+            {transformTool === "move" ? (
               <button
                 type="button"
                 className={`tool-button secondary grab-button ${isGrabActive ? "active" : ""}`}
@@ -1714,8 +2092,12 @@ function App() {
                 <Move size={17} />
                 <span>
                   {isGrabActive
-                    ? "释放准星跟随"
-                    : `抓取到准星 (${formatKeyCode(editorSettings.shortcuts.grabSelection)})`}
+                    ? editorViewMode === "topdown"
+                      ? "释放俯视抓取"
+                      : "释放准星跟随"
+                    : editorViewMode === "topdown"
+                      ? `按住${formatKeyCode(editorSettings.shortcuts.grabSelection)}拖动物体`
+                      : `抓取到准星 (${formatKeyCode(editorSettings.shortcuts.grabSelection)})`}
                 </span>
               </button>
             ) : null}
@@ -1832,13 +2214,14 @@ function App() {
                 <button
                   type="button"
                   className="tool-button secondary"
-                  onClick={() =>
+                  onClick={() => {
+                    recordEditHistory(`layout:${selectedImage.id}`);
                     setLayouts((current) => {
                       const next = { ...current };
                       delete next[selectedImage.id];
                       return next;
-                    })
-                  }
+                    });
+                  }}
                 >
                   <Maximize2 size={17} />
                   <span>重置画作变换</span>

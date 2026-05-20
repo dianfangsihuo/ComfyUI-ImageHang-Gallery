@@ -1,5 +1,8 @@
 .learnings/
 node_modules/
 dist/
+.gallery-data/
 *.log
 .env.local
+__pycache__/
+*.pyc
