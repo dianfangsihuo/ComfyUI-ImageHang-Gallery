@@ -9,6 +9,12 @@ Image Hang 的 ComfyUI 集成扩展。
 - 面板中可以查看、删除画廊图片。
 - 可开启“自动收集生成图”，ComfyUI 节点执行完成后会把输出图片复制到画廊。
 
+## 工作流演示
+
+插件会出现在 ComfyUI 工作流页面中。打开“画廊”面板后，可以在生成工作流旁边直接管理画廊图片，并切换是否自动收集本次工作流输出。
+
+![ComfyUI 工作流中的 Image Hang 画廊插件演示](../../docs/images/comfyui-gallery-plugin-demo.png)
+
 ## 保存位置
 
 数据保存到：
