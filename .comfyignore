@@ -1,0 +1,13 @@
+.git/
+.github/
+.gallery-data/
+.learnings/
+dist/
+node_modules/
+*.log
+*.mp4
+.tmp-*
+vite-dev*.log
+public/
+docs/
+AGENTS.md
