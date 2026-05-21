@@ -129,6 +129,29 @@ async function deleteComfyGalleryImage(id: string) {
   return { ok: true, synced: true, removed: Boolean(removed) };
 }
 
+async function syncComfyGalleryStructure(localState: ReturnType<typeof normalizeGalleryState>) {
+  if (!comfyStateFile) {
+    return { synced: false };
+  }
+
+  let comfyState: Record<string, unknown> = {};
+  try {
+    const raw = await fs.readFile(comfyStateFile, "utf8");
+    comfyState = objectValue<Record<string, unknown>>(JSON.parse(raw.replace(/^\uFEFF/, "")), {});
+  } catch {
+    comfyState = {};
+  }
+
+  comfyState.roomConfig = localState.roomConfig;
+  comfyState.customWalls = localState.customWalls;
+  comfyState.doors = localState.doors;
+  comfyState.editorSettings = localState.editorSettings;
+
+  await fs.mkdir(path.dirname(comfyStateFile), { recursive: true });
+  await fs.writeFile(comfyStateFile, `${JSON.stringify(comfyState, null, 2)}\n`, "utf8");
+  return { synced: true };
+}
+
 function localGalleryPersistencePlugin(): Plugin {
   return {
     name: "local-gallery-persistence",
@@ -192,6 +215,7 @@ function localGalleryPersistencePlugin(): Plugin {
             const body = await readBody(request);
             const state = normalizeGalleryState(JSON.parse(body));
             await fs.writeFile(galleryFile, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+            await syncComfyGalleryStructure(state);
             sendJson(response, 200, { ok: true });
           } catch (error) {
             sendJson(response, 500, {

@@ -339,6 +339,10 @@ def _default_state() -> dict[str, Any]:
         "version": 1,
         "images": [],
         "settings": DEFAULT_SETTINGS.copy(),
+        "roomConfig": DEFAULT_ROOM_CONFIG.copy(),
+        "customWalls": [],
+        "doors": [],
+        "editorSettings": DEFAULT_EDITOR_SETTINGS.copy(),
     }
 
 
@@ -355,6 +359,10 @@ def _load_state() -> dict[str, Any]:
 
     state.setdefault("version", 1)
     state.setdefault("images", [])
+    state["roomConfig"] = _dict_value(state.get("roomConfig"), DEFAULT_ROOM_CONFIG)
+    state["customWalls"] = _list_value(state.get("customWalls"))
+    state["doors"] = _list_value(state.get("doors"))
+    state["editorSettings"] = _dict_value(state.get("editorSettings"), DEFAULT_EDITOR_SETTINGS)
     state["settings"] = {
         **DEFAULT_SETTINGS,
         **state.get("settings", {}),
@@ -411,15 +419,19 @@ def _load_project_gallery_state(project_root: Path) -> dict[str, Any]:
 
 
 def _project_room_config(project_root: Path | None) -> dict[str, Any]:
+    state_room_config = _dict_value(_load_state().get("roomConfig"), DEFAULT_ROOM_CONFIG)
     if project_root is None:
-        return DEFAULT_ROOM_CONFIG
+        return state_room_config
 
-    return _dict_value(_load_project_gallery_state(project_root).get("roomConfig"), DEFAULT_ROOM_CONFIG)
+    project_state = _load_project_gallery_state(project_root)
+    return _dict_value(project_state.get("roomConfig"), state_room_config)
 
 
 def _room_count(room_config: dict[str, Any]) -> int:
     try:
-        return max(1, int(room_config.get("roomCount", 1)))
+        rooms = room_config.get("rooms")
+        rooms_count = len(rooms) if isinstance(rooms, list) else 0
+        return max(1, int(room_config.get("roomCount", 1)), rooms_count)
     except Exception:
         return 1
 
@@ -428,16 +440,92 @@ def _built_wall_target(room_index: int, wall: str) -> str:
     return wall if room_index <= 0 else f"room-{room_index}:{wall}"
 
 
-def _default_frame_layout(image: dict[str, Any], room_config: dict[str, Any], room_index: int) -> dict[str, Any]:
+def _room_dimensions(room_config: dict[str, Any], room_index: int) -> dict[str, Any]:
+    rooms = room_config.get("rooms")
+    if isinstance(rooms, list) and room_index < len(rooms) and isinstance(rooms[room_index], dict):
+        return rooms[room_index]
+    return room_config
+
+
+def _wall_room_index(wall: Any) -> int:
+    if wall in {"north", "south", "west", "east"}:
+        return 0
+    if isinstance(wall, str) and wall.startswith("room-"):
+        try:
+            return int(wall.split(":", 1)[0].removeprefix("room-"))
+        except Exception:
+            return 0
+    return 0
+
+
+def _wall_length(room_config: dict[str, Any], wall: str, room_index: int) -> float:
+    dimensions = _room_dimensions(room_config, room_index)
+    width = float(dimensions.get("width") or room_config.get("width") or 18)
+    depth = float(dimensions.get("depth") or room_config.get("depth") or 22)
+    return width if wall in {"north", "south"} else depth
+
+
+def _layout_overlaps(a: dict[str, Any], b: dict[str, Any], image_a: dict[str, Any], image_b: dict[str, Any]) -> bool:
+    if a.get("wall") != b.get("wall"):
+        return False
+
+    width_a = float(a.get("width") or 2.6) + 0.5
+    width_b = float(b.get("width") or 2.6) + 0.5
+    height_a = width_a / max(0.35, float(image_a.get("width") or 1200) / max(1.0, float(image_a.get("height") or 840)))
+    height_b = width_b / max(0.35, float(image_b.get("width") or 1200) / max(1.0, float(image_b.get("height") or 840)))
+    offset_gap = abs(float(a.get("offset") or 0) - float(b.get("offset") or 0))
+    height_gap = abs(float(a.get("height") or 2.4) - float(b.get("height") or 2.4))
+    return offset_gap < (width_a + width_b) / 2 and height_gap < (height_a + height_b) / 2
+
+
+def _auto_frame_layout(
+    image: dict[str, Any],
+    room_config: dict[str, Any],
+    room_index: int,
+    occupied: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     safe_room_index = max(0, min(room_index, _room_count(room_config) - 1))
     width = float(image.get("width") or 1200)
     height = max(1.0, float(image.get("height") or 840))
+    aspect = max(0.35, width / height)
     frame_width = min(3.4, max(2.15, (width / height) * 2.15))
+    dimensions = _room_dimensions(room_config, safe_room_index)
+    room_height = float(dimensions.get("height") or room_config.get("height") or 5.2)
+    frame_outer_width = frame_width + 0.28
+    frame_outer_height = frame_width / aspect + 0.28
+    occupied = occupied or []
+    wall_order = ["north", "west", "east", "south"]
+    candidates: list[dict[str, Any]] = []
+
+    for wall in wall_order:
+        wall_length = _wall_length(room_config, wall, safe_room_index)
+        offset_limit = max(0.0, wall_length / 2 - frame_outer_width / 2 - 0.18)
+        min_height = min(room_height / 2, frame_outer_height / 2 + 0.18)
+        max_height = max(min_height, room_height - frame_outer_height / 2 - 0.18)
+        columns = max(1, int((offset_limit * 2 + 0.7) // (frame_outer_width + 0.7)))
+        rows = max(1, int(((max_height - min_height) + 0.55) // (frame_outer_height + 0.55)))
+
+        for row in range(rows):
+            y = (min_height + max_height) / 2 if rows == 1 else max_height - row * ((max_height - min_height) / (rows - 1))
+            for column in range(columns):
+                offset = 0.0 if columns == 1 else -offset_limit + column * ((offset_limit * 2) / (columns - 1))
+                candidates.append(
+                    {
+                        "wall": _built_wall_target(safe_room_index, wall),
+                        "offset": offset,
+                        "height": y,
+                        "width": frame_width,
+                    }
+                )
+
+    for candidate in candidates:
+        if not any(_layout_overlaps(candidate, layout, image, other) for layout, other in occupied):
+            return candidate
 
     return {
         "wall": _built_wall_target(safe_room_index, "north"),
         "offset": 0,
-        "height": 2.4,
+        "height": min(max(room_height * 0.48, 2.2), max(2.2, room_height - 1.15)),
         "width": frame_width,
     }
 
@@ -505,7 +593,15 @@ def _update_project_gallery_image_room(image_id: str, target_room_index: int) ->
         return
 
     layouts = _dict_value(state.get("layouts"), {})
-    layouts[image_id] = _default_frame_layout(target_image, room_config, safe_room_index)
+    images = _list_value(state.get("images"))
+    occupied = [
+        (layout, image)
+        for image in images
+        if image.get("id") != image_id
+        for layout in [layouts.get(image.get("id"))]
+        if isinstance(layout, dict) and _wall_room_index(layout.get("wall")) == safe_room_index
+    ]
+    layouts[image_id] = _auto_frame_layout(target_image, room_config, safe_room_index, occupied)
     state["layouts"] = layouts
 
     try:
@@ -559,6 +655,12 @@ def _copy_state_to_project(project_root: Path) -> None:
     existing = _load_project_gallery_state(project_root)
     room_config = _dict_value(existing.get("roomConfig"), DEFAULT_ROOM_CONFIG)
     layouts = _dict_value(existing.get("layouts"), {}).copy()
+    occupied_layouts = [
+        (layout, image)
+        for image in _list_value(existing.get("images"))
+        for layout in [layouts.get(image.get("id"))]
+        if isinstance(layout, dict)
+    ]
 
     images = []
     for image in state.get("images", []):
@@ -583,7 +685,9 @@ def _copy_state_to_project(project_root: Path) -> None:
             "origin": origin,
         }
         if local_image["id"] not in layouts:
-            layouts[local_image["id"]] = _default_frame_layout(local_image, room_config, target_room_index)
+            layout = _auto_frame_layout(local_image, room_config, target_room_index, occupied_layouts)
+            layouts[local_image["id"]] = layout
+            occupied_layouts.append((layout, local_image))
         images.append(local_image)
 
     local_state = {

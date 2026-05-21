@@ -428,6 +428,105 @@ function calculateGalleryCapacity(
   }, 0);
 }
 
+function getLayoutRoomIndex(layout: GalleryFrameLayout, customWalls: GalleryCustomWall[]) {
+  const built = parseBuiltWallTarget(layout.wall);
+
+  if (built) {
+    return built.roomIndex;
+  }
+
+  return parseCustomWallTarget(layout.wall, customWalls)?.wall.roomIndex ?? 0;
+}
+
+function getPreferredRoomIndex(image: GalleryImage, room: GalleryRoomConfig) {
+  return Math.round(
+    clamp(image.targetRoomIndex ?? image.origin?.targetRoomIndex ?? 0, 0, room.roomCount - 1),
+  );
+}
+
+function layoutsOverlap(
+  aLayout: GalleryFrameLayout,
+  aImage: GalleryImage,
+  bLayout: GalleryFrameLayout,
+  bImage: GalleryImage,
+) {
+  if (aLayout.wall !== bLayout.wall) {
+    return false;
+  }
+
+  const aAspect = getImageAspect(aImage);
+  const bAspect = getImageAspect(bImage);
+  const aOuterWidth = aLayout.width + frameOuterPadding + 0.42;
+  const bOuterWidth = bLayout.width + frameOuterPadding + 0.42;
+  const aOuterHeight = aLayout.width / aAspect + frameOuterPadding + 0.38;
+  const bOuterHeight = bLayout.width / bAspect + frameOuterPadding + 0.38;
+
+  return (
+    Math.abs(aLayout.offset - bLayout.offset) < (aOuterWidth + bOuterWidth) / 2 &&
+    Math.abs(aLayout.height - bLayout.height) < (aOuterHeight + bOuterHeight) / 2
+  );
+}
+
+function findAutoLayoutForRoom(
+  image: GalleryImage,
+  roomIndex: number,
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  occupied: Array<{ image: GalleryImage; layout: GalleryFrameLayout }>,
+) {
+  const safeRoomIndex = Math.round(clamp(roomIndex, 0, room.roomCount - 1));
+  const width = getDefaultFrameWidth(image);
+  const aspect = getImageAspect(image);
+  const frameOuterWidth = width + frameOuterPadding;
+  const frameOuterHeight = width / aspect + frameOuterPadding;
+  const candidates: GalleryFrameLayout[] = [];
+
+  for (const [wall] of builtWallOptions) {
+    const wallTarget = builtWallTarget(safeRoomIndex, wall);
+    const wallLength = getWallTargetLength(room, customWalls, wallTarget);
+    const wallHeight = getWallTargetHeight(room, customWalls, wallTarget);
+    const offsetLimit = Math.max(0, wallLength / 2 - frameOuterWidth / 2 - frameWallMargin);
+    const minHeight = Math.min(wallHeight / 2, frameOuterHeight / 2 + frameWallMargin);
+    const maxHeight = Math.max(minHeight, wallHeight - frameOuterHeight / 2 - frameWallMargin);
+    const columns = Math.max(1, Math.floor((offsetLimit * 2 + 0.7) / (frameOuterWidth + 0.7)));
+    const rows = Math.max(1, Math.floor(((maxHeight - minHeight) + 0.55) / (frameOuterHeight + 0.55)));
+
+    for (let row = 0; row < rows; row += 1) {
+      const height =
+        rows === 1 ? (minHeight + maxHeight) / 2 : maxHeight - row * ((maxHeight - minHeight) / (rows - 1));
+
+      for (let column = 0; column < columns; column += 1) {
+        const offset =
+          columns === 1 ? 0 : -offsetLimit + column * ((offsetLimit * 2) / (columns - 1));
+
+        candidates.push({
+          wall: wallTarget,
+          offset,
+          height,
+          width,
+        });
+      }
+    }
+  }
+
+  return (
+    candidates.find((candidate) =>
+      occupied.every((item) => !layoutsOverlap(candidate, image, item.layout, item.image)),
+    ) ??
+    normalizeFrameLayout(
+      image,
+      {
+        wall: builtWallTarget(safeRoomIndex, "north"),
+        offset: 0,
+        height: getRoomDimensions(room, safeRoomIndex).height * 0.48,
+        width,
+      },
+      room,
+      customWalls,
+    )
+  );
+}
+
 function App() {
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [layouts, setLayouts] = useState<GalleryLayouts>(() => loadStoredLayouts());
@@ -751,19 +850,40 @@ function App() {
     setLayouts((current) => {
       let changed = false;
       const next = { ...current };
+      const occupied: Array<{ image: GalleryImage; layout: GalleryFrameLayout }> = [];
 
       sceneImages.forEach((image) => {
         const currentLayout = current[image.id];
+        const preferredRoomIndex = getPreferredRoomIndex(image, roomConfig);
+
         if (!currentLayout) {
+          const layout = findAutoLayoutForRoom(image, preferredRoomIndex, roomConfig, customWalls, occupied);
+          next[image.id] = layout;
+          occupied.push({ image, layout });
+          changed = true;
           return;
         }
 
         const normalized = normalizeFrameLayout(image, currentLayout, roomConfig, customWalls);
+        const shouldMoveToPreferredRoom = getLayoutRoomIndex(normalized, customWalls) !== preferredRoomIndex;
+        const overlapsExisting = occupied.some((item) =>
+          layoutsOverlap(normalized, image, item.layout, item.image),
+        );
+
+        if (shouldMoveToPreferredRoom || overlapsExisting) {
+          const layout = findAutoLayoutForRoom(image, preferredRoomIndex, roomConfig, customWalls, occupied);
+          next[image.id] = layout;
+          occupied.push({ image, layout });
+          changed = true;
+          return;
+        }
 
         if (layoutChanged(currentLayout, normalized)) {
           changed = true;
           next[image.id] = normalized;
         }
+
+        occupied.push({ image, layout: next[image.id] ?? normalized });
       });
 
       return changed ? next : current;

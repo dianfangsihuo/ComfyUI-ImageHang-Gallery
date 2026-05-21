@@ -450,7 +450,7 @@ function updateRoomOptions(roomConfig) {
     return;
   }
 
-  const roomCount = Math.max(1, Number(roomConfig?.roomCount) || 1);
+  const roomCount = Math.max(1, Number(roomConfig?.roomCount) || 1, Array.isArray(roomConfig?.rooms) ? roomConfig.rooms.length : 0);
   currentRoomCount = roomCount;
   const selected = clamp(Number(settings.targetRoomIndex) || 0, 0, roomCount - 1);
   targetRoomSelect.innerHTML = "";
@@ -625,7 +625,7 @@ async function loadGallery() {
     };
     autoStoreToggle.checked = Boolean(settings.autoStore);
     openOnStartToggle.checked = Boolean(settings.openOnStart);
-    updateRoomOptions(data.roomConfig);
+    updateRoomOptions(data.state?.roomConfig || data.roomConfig);
     renderImages(data.state?.images || []);
     setStatus(`保存目录：${data.dataDir || "ComfyUI/user/image_hang_gallery"}`);
   } catch (error) {

@@ -704,13 +704,16 @@ function layoutOverlapsDoorOpening(
   });
 }
 
-function getRoomIndexAtWorldX(room: GalleryRoomConfig, worldX: number) {
+function getRoomIndexAtWorldPoint(room: GalleryRoomConfig, worldX: number, worldZ: number) {
   let bestIndex = 0;
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (let roomIndex = 0; roomIndex < room.roomCount; roomIndex += 1) {
     const center = getRoomCenter(room, roomIndex);
-    const distance = Math.abs(worldX - center.x);
+    const dimensions = getRoomDimensions(room, roomIndex);
+    const outsideX = Math.max(0, Math.abs(worldX - center.x) - dimensions.width / 2);
+    const outsideZ = Math.max(0, Math.abs(worldZ - center.z) - dimensions.depth / 2);
+    const distance = outsideX * outsideX + outsideZ * outsideZ;
 
     if (distance < bestDistance) {
       bestIndex = roomIndex;
@@ -726,7 +729,7 @@ function getPlacementFromWorldPoint(
   point: THREE.Vector3,
   wallHit?: Pick<BuilderPlacementTarget, "wall" | "wallOffset" | "wallHeight" | "label">,
 ): BuilderPlacementTarget {
-  const roomIndex = getRoomIndexAtWorldX(room, point.x);
+  const roomIndex = getRoomIndexAtWorldPoint(room, point.x, point.z);
   const center = getRoomCenter(room, roomIndex);
   const dimensions = getRoomDimensions(room, roomIndex);
 
@@ -1084,13 +1087,15 @@ function EditorCameraControls({ room, isGrabActive }: { room: GalleryRoomConfig;
 
   const clampTarget = () => {
     const bounds = getGalleryBounds(room);
-    const targetRoom = getRoomDimensions(room, getRoomIndexAtWorldX(room, target.current.x));
+    const roomIndex = getRoomIndexAtWorldPoint(room, target.current.x, target.current.z);
+    const targetRoom = getRoomDimensions(room, roomIndex);
+    const targetRoomCenter = getRoomCenter(room, roomIndex);
 
     target.current.x = THREE.MathUtils.clamp(target.current.x, bounds.minX - 2, bounds.maxX + 2);
     target.current.z = THREE.MathUtils.clamp(
       target.current.z,
-      Math.min(bounds.minZ - 2, getRoomCenter(room, getRoomIndexAtWorldX(room, target.current.x)).z - targetRoom.depth / 2 - 2),
-      Math.max(bounds.maxZ + 2, getRoomCenter(room, getRoomIndexAtWorldX(room, target.current.x)).z + targetRoom.depth / 2 + 2),
+      Math.min(bounds.minZ - 2, targetRoomCenter.z - targetRoom.depth / 2 - 2),
+      Math.max(bounds.maxZ + 2, targetRoomCenter.z + targetRoom.depth / 2 + 2),
     );
   };
 
