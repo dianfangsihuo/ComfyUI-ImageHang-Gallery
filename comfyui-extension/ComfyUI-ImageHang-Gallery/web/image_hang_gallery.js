@@ -8,10 +8,12 @@ const importUrl = "/image-hang-gallery/import-generated";
 let panel;
 let grid;
 let statusLine;
+let paginationControls;
 let autoStoreToggle;
 let openOnStartToggle;
 let targetRoomSelect;
 const layoutStorageKey = "image-hang-gallery-panel-layout";
+const imagesPerPage = 8;
 const defaultPanelLayout = {
   width: 380,
   height: 520,
@@ -26,6 +28,8 @@ let settings = {
 };
 let currentRoomCount = 1;
 let knownFingerprints = new Set();
+let currentImages = [];
+let currentPage = 1;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -240,6 +244,48 @@ function injectStyle() {
       min-height: 16px;
     }
 
+    .image-hang-pagination {
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 7px 8px;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 6px;
+      background: rgba(255,255,255,.055);
+      color: #d5c7b5;
+      font: 800 12px/1.2 system-ui, sans-serif;
+    }
+
+    .image-hang-pagination.is-visible {
+      display: flex;
+    }
+
+    .image-hang-pagination span {
+      min-width: 0;
+      overflow: hidden;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .image-hang-page-button {
+      flex: 0 0 auto;
+      min-width: 64px;
+      border: 0;
+      border-radius: 6px;
+      padding: 6px 8px;
+      color: #2f281f;
+      background: #eadcc9;
+      font: 900 12px/1 system-ui, sans-serif;
+      cursor: pointer;
+    }
+
+    .image-hang-page-button:disabled {
+      cursor: default;
+      opacity: .42;
+    }
+
     .image-hang-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -371,6 +417,11 @@ function makePanel() {
       <select class="image-hang-room-select" data-setting="targetRoomIndex" title="自动收集图片时指定挂到哪个房间"></select>
     </div>
     <div class="image-hang-status"></div>
+    <div class="image-hang-pagination" aria-label="画作分页">
+      <button type="button" class="image-hang-page-button" data-page-action="prev">上一页</button>
+      <span data-page-label>第 1 / 1 页</span>
+      <button type="button" class="image-hang-page-button" data-page-action="next">下一页</button>
+    </div>
     <div class="image-hang-grid"></div>
     <button type="button" class="image-hang-resize" aria-label="调整画廊大小" title="拖动调整大小"></button>
   `;
@@ -379,6 +430,7 @@ function makePanel() {
 
   grid = panel.querySelector(".image-hang-grid");
   statusLine = panel.querySelector(".image-hang-status");
+  paginationControls = panel.querySelector(".image-hang-pagination");
   autoStoreToggle = panel.querySelector('[data-setting="autoStore"]');
   openOnStartToggle = panel.querySelector('[data-setting="openOnStart"]');
   targetRoomSelect = panel.querySelector('[data-setting="targetRoomIndex"]');
@@ -438,6 +490,14 @@ function makePanel() {
     void saveSettings();
   });
 
+  paginationControls.querySelector('[data-page-action="prev"]').addEventListener("click", () => {
+    setImagePage(currentPage - 1);
+  });
+
+  paginationControls.querySelector('[data-page-action="next"]').addEventListener("click", () => {
+    setImagePage(currentPage + 1);
+  });
+
   enablePanelDragAndResize();
   window.addEventListener("resize", () => {
     applyPanelLayout(readPanelLayout());
@@ -480,6 +540,32 @@ function makeRoomSelect(selectedRoomIndex, onChange) {
   select.value = String(selected);
   select.addEventListener("change", () => onChange(Number(select.value) || 0));
   return select;
+}
+
+function getPageCount() {
+  return Math.max(1, Math.ceil(currentImages.length / imagesPerPage));
+}
+
+function updatePaginationControls() {
+  if (!paginationControls) {
+    return;
+  }
+
+  const pageCount = getPageCount();
+  const hasMultiplePages = currentImages.length > imagesPerPage;
+  const prevButton = paginationControls.querySelector('[data-page-action="prev"]');
+  const nextButton = paginationControls.querySelector('[data-page-action="next"]');
+  const label = paginationControls.querySelector("[data-page-label]");
+
+  paginationControls.classList.toggle("is-visible", hasMultiplePages);
+  prevButton.disabled = currentPage <= 1;
+  nextButton.disabled = currentPage >= pageCount;
+  label.textContent = `第 ${currentPage} / ${pageCount} 页 · 共 ${currentImages.length} 张`;
+}
+
+function setImagePage(page) {
+  currentPage = clamp(Number(page) || 1, 1, getPageCount());
+  renderCurrentPage();
 }
 
 function enablePanelDragAndResize() {
@@ -553,23 +639,22 @@ function enablePanelDragAndResize() {
   });
 }
 
-function renderImages(images) {
+function renderCurrentPage() {
   grid.innerHTML = "";
-  knownFingerprints = new Set(
-    images
-      .map((image) => image.origin?.fingerprint)
-      .filter(Boolean),
-  );
 
-  if (!images.length) {
+  if (!currentImages.length) {
     const empty = document.createElement("div");
     empty.className = "image-hang-status";
     empty.textContent = "画廊里还没有图片。开启自动收集后，生成完成的图片会进入这里。";
     grid.appendChild(empty);
+    updatePaginationControls();
     return;
   }
 
-  for (const image of images) {
+  const start = (currentPage - 1) * imagesPerPage;
+  const pageImages = currentImages.slice(start, start + imagesPerPage);
+
+  for (const image of pageImages) {
     const card = document.createElement("article");
     card.className = "image-hang-card";
     card.innerHTML = `
@@ -614,6 +699,19 @@ function renderImages(images) {
     });
     grid.appendChild(card);
   }
+
+  updatePaginationControls();
+}
+
+function renderImages(images) {
+  currentImages = Array.isArray(images) ? images : [];
+  knownFingerprints = new Set(
+    currentImages
+      .map((image) => image.origin?.fingerprint)
+      .filter(Boolean),
+  );
+  currentPage = clamp(currentPage, 1, getPageCount());
+  renderCurrentPage();
 }
 
 async function loadGallery() {
