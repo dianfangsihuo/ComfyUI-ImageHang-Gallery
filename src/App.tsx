@@ -13,7 +13,7 @@ import {
   Trash2,
   UploadCloud,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
 import GalleryScene, { getDefaultLayout } from "./components/GalleryScene";
 import {
   clearStoredImages,
@@ -558,6 +558,7 @@ function App() {
   const [isSavingLocal, setIsSavingLocal] = useState(false);
   const [isProjectStorageReady, setIsProjectStorageReady] = useState(false);
   const [message, setMessage] = useState("");
+  const [dragOverRoomIndex, setDragOverRoomIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<GalleryImage[]>([]);
   const hasLoadedLocalProjectRef = useRef(false);
@@ -1084,6 +1085,80 @@ function App() {
         [id]: nextLayout,
       };
     });
+  }
+
+  function getImageRoomIndex(image: GalleryImage) {
+    const layout = layouts[image.id];
+    if (layout) {
+      return getLayoutRoomIndex(layout, customWalls);
+    }
+
+    return getPreferredRoomIndex(image, roomConfig);
+  }
+
+  function moveImageToRoom(imageId: string, roomIndex: number) {
+    const imageIndex = sceneImages.findIndex((image) => image.id === imageId);
+    const image = imageIndex >= 0 ? sceneImages[imageIndex] : undefined;
+
+    if (!image) {
+      return;
+    }
+
+    const safeRoomIndex = Math.round(clamp(roomIndex, 0, roomConfig.roomCount - 1));
+    const occupied = sceneImages
+      .filter((item) => item.id !== imageId)
+      .map((item, index) => ({
+        image: item,
+        layout:
+          layouts[item.id] ??
+          getDefaultLayout(item, Math.max(index, 0), roomConfig),
+      }))
+      .filter((item) => getLayoutRoomIndex(item.layout, customWalls) === safeRoomIndex);
+    const nextLayout = findAutoLayoutForRoom(
+      image,
+      safeRoomIndex,
+      roomConfig,
+      customWalls,
+      occupied,
+    );
+
+    recordEditHistory(`move-artwork-room:${imageId}`);
+    setImages((current) =>
+      current.map((item) => {
+        if (item.id !== imageId) {
+          return item;
+        }
+
+        return {
+          ...item,
+          targetRoomIndex: safeRoomIndex,
+          origin: {
+            ...item.origin,
+            targetRoomIndex: safeRoomIndex,
+          },
+        };
+      }),
+    );
+    setLayouts((current) => ({
+      ...current,
+      [imageId]: nextLayout,
+    }));
+    setPendingPlacementIds((current) => current.filter((item) => item !== imageId));
+    setSelectedRoomIndex(safeRoomIndex);
+    selectArtwork(imageId);
+    setMessage(`已移动到房间 ${safeRoomIndex + 1}`);
+  }
+
+  function handleImageRoomDrop(event: DragEvent, roomIndex: number) {
+    event.preventDefault();
+    const imageId =
+      event.dataTransfer.getData("application/x-image-hang-artwork") ||
+      event.dataTransfer.getData("text/plain");
+    setDragOverRoomIndex(null);
+
+    if (imageId) {
+      moveImageToRoom(imageId, roomIndex);
+    }
   }
 
   function updateRoomConfig(patch: Partial<GalleryRoomConfig & GalleryRoomDimensions>) {
@@ -2835,6 +2910,27 @@ function App() {
           <span>{images.length || samples.length}</span>
         </div>
 
+        <div className="collection-room-targets" aria-label="拖动画作到房间">
+          {Array.from({ length: roomConfig.roomCount }, (_, roomIndex) => (
+            <button
+              key={roomIndex}
+              type="button"
+              className={dragOverRoomIndex === roomIndex ? "drag-over" : ""}
+              onClick={() => setSelectedRoomIndex(roomIndex)}
+              onDragOver={(event) => {
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+                setDragOverRoomIndex(roomIndex);
+              }}
+              onDragLeave={() => setDragOverRoomIndex((current) => (current === roomIndex ? null : current))}
+              onDrop={(event) => handleImageRoomDrop(event, roomIndex)}
+              title={`拖动画作到房间 ${roomIndex + 1}`}
+            >
+              房间 {roomIndex + 1}
+            </button>
+          ))}
+        </div>
+
         <div className="image-list">
           {images.length === 0 ? (
             samples.slice(0, 4).map((image) => (
@@ -2855,13 +2951,36 @@ function App() {
               <article
                 className={`image-item ${selectedImageId === image.id ? "selected" : ""}`}
                 key={image.id}
+                draggable
+                onDragStart={(event) => {
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("application/x-image-hang-artwork", image.id);
+                  event.dataTransfer.setData("text/plain", image.id);
+                }}
+                onDragEnd={() => setDragOverRoomIndex(null)}
                 onClick={() => selectArtwork(image.id)}
               >
                 <img src={image.url} alt="" />
                 <div>
                   <strong title={image.name}>{image.name}</strong>
-                  <span>{image.source}</span>
+                  <span>{image.source} · 房间 {getImageRoomIndex(image) + 1}</span>
                 </div>
+                <select
+                  className="image-room-select"
+                  value={getImageRoomIndex(image)}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => {
+                    event.stopPropagation();
+                    moveImageToRoom(image.id, Number(event.target.value));
+                  }}
+                  title="移动到房间"
+                >
+                  {Array.from({ length: roomConfig.roomCount }, (_, roomIndex) => (
+                    <option key={roomIndex} value={roomIndex}>
+                      房间 {roomIndex + 1}
+                    </option>
+                  ))}
+                </select>
                 <button
                   type="button"
                   className="delete-button"

@@ -234,6 +234,7 @@ button {
 .view-panel .button-row,
 .view-panel .editor-panel,
 .view-panel .collection-header,
+.view-panel .collection-room-targets,
 .view-panel .image-list,
 .view-panel .message {
   display: none;
@@ -1109,6 +1110,31 @@ kbd {
   font-weight: 800;
 }
 
+.collection-room-targets {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(76px, 1fr));
+  gap: 8px;
+  margin-top: -8px;
+}
+
+.collection-room-targets button {
+  min-width: 0;
+  height: 32px;
+  border: 1px solid rgba(75, 62, 48, 0.16);
+  border-radius: 6px;
+  color: #4f4438;
+  background: #fbf7ef;
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.collection-room-targets button.drag-over {
+  border-color: rgba(246, 196, 83, 0.95);
+  color: #211b15;
+  background: #fff1c7;
+  box-shadow: 0 0 0 2px rgba(246, 196, 83, 0.2);
+}
+
 .image-list {
   display: flex;
   flex-direction: column;
@@ -1118,7 +1144,7 @@ kbd {
 
 .image-item {
   display: grid;
-  grid-template-columns: 56px minmax(0, 1fr) 34px;
+  grid-template-columns: 56px minmax(0, 1fr) 82px 34px;
   align-items: center;
   gap: 10px;
   min-height: 68px;
@@ -1127,6 +1153,14 @@ kbd {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.45);
   cursor: pointer;
+}
+
+.image-item[draggable="true"] {
+  cursor: grab;
+}
+
+.image-item[draggable="true"]:active {
+  cursor: grabbing;
 }
 
 .image-item.muted {
@@ -1165,6 +1199,18 @@ kbd {
   color: #736657;
   font-size: 0.74rem;
   text-transform: uppercase;
+}
+
+.image-room-select {
+  width: 100%;
+  min-width: 0;
+  height: 32px;
+  border: 1px solid rgba(75, 62, 48, 0.16);
+  border-radius: 6px;
+  color: #332b24;
+  background: #fbf7ef;
+  font-size: 0.72rem;
+  font-weight: 900;
 }
 
 .delete-button {
