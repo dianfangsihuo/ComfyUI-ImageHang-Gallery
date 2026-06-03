@@ -760,7 +760,14 @@ def _start_viewer_service(project_root: Path) -> str:
         raise RuntimeError("找不到 npm，请先安装 Node.js")
 
     if not (project_root / "node_modules").is_dir():
-        subprocess.run([npm, "install"], cwd=project_root, check=True)
+        install_command = [npm, "ci"] if (project_root / "package-lock.json").is_file() else [npm, "install"]
+        try:
+            subprocess.run(install_command, cwd=project_root, check=True)
+        except subprocess.CalledProcessError:
+            if install_command[1] == "ci":
+                subprocess.run([npm, "install"], cwd=project_root, check=True)
+            else:
+                raise
 
     port = _find_viewer_port()
     env = {
