@@ -345,9 +345,9 @@ function injectStyle() {
       white-space: nowrap;
     }
 
+    .image-hang-download,
     .image-hang-delete {
       position: absolute;
-      right: 7px;
       top: 7px;
       display: grid;
       place-items: center;
@@ -361,6 +361,21 @@ function injectStyle() {
       box-shadow: 0 6px 16px rgba(0,0,0,.36);
       font: 900 16px/1 system-ui, sans-serif;
       cursor: pointer;
+    }
+
+    .image-hang-download {
+      left: 7px;
+      background: rgba(26, 86, 98, .86);
+      font-size: 13px;
+    }
+
+    .image-hang-delete {
+      right: 7px;
+      background: rgba(143,48,38,.86);
+    }
+
+    .image-hang-download:hover {
+      background: rgba(34, 120, 135, .96);
     }
 
     .image-hang-delete:hover {
@@ -542,6 +557,22 @@ function makeRoomSelect(selectedRoomIndex, onChange) {
   return select;
 }
 
+function getDownloadName(image) {
+  const source = image.filename || image.name || image.id || "image-hang-gallery";
+  const name = String(source).split(/[\\/]/).pop().replace(/[<>:"/\\|?*\x00-\x1F]/g, "_").trim();
+  return name || "image-hang-gallery.png";
+}
+
+function downloadImage(image) {
+  const link = document.createElement("a");
+  link.href = image.url;
+  link.download = getDownloadName(image);
+  link.rel = "noopener";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
 function getPageCount() {
   return Math.max(1, Math.ceil(currentImages.length / imagesPerPage));
 }
@@ -659,6 +690,7 @@ function renderCurrentPage() {
     card.className = "image-hang-card";
     card.innerHTML = `
       <img src="${image.url}" loading="lazy" alt="">
+      <button type="button" class="image-hang-download" title="下载图片" aria-label="下载图片">↓</button>
       <button type="button" class="image-hang-delete" title="从画廊删除" aria-label="删除画作">×</button>
       <footer>
         <span title="${image.name || ""}">${image.name || "Untitled"}</span>
@@ -680,6 +712,10 @@ function renderCurrentPage() {
         }
       }),
     );
+    card.querySelector(".image-hang-download").addEventListener("click", (event) => {
+      event.stopPropagation();
+      downloadImage(image);
+    });
     card.querySelector(".image-hang-delete").addEventListener("click", async (event) => {
       event.stopPropagation();
       const confirmed = window.confirm(`删除这张画作？\n${image.name || "Untitled"}`);
