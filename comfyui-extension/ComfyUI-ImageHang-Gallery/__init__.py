@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from aiohttp import web
 from PIL import Image
 
@@ -20,8 +21,6 @@ from server import PromptServer
 
 
 WEB_DIRECTORY = "web"
-NODE_CLASS_MAPPINGS = {}
-NODE_DISPLAY_NAME_MAPPINGS = {}
 
 
 DATA_DIR = Path(folder_paths.get_user_directory()) / "image_hang_gallery"
@@ -883,6 +882,200 @@ def _fingerprint(image: dict[str, Any]) -> str:
     )
 
 
+def _import_generated_image_records(
+    images: list[Any],
+    target_room_index: int,
+    *,
+    respect_dedupe_setting: bool = True,
+) -> dict[str, Any]:
+    state = _load_state()
+    settings = state.get("settings", DEFAULT_SETTINGS)
+    existing = {
+        item.get("origin", {}).get("fingerprint")
+        for item in state.get("images", [])
+        if item.get("origin", {}).get("fingerprint")
+    }
+    imported: list[dict[str, Any]] = []
+    skipped = 0
+    full = 0
+    project_root = _project_root()
+    project_state = _load_project_gallery_state(project_root) if project_root else {}
+    room_config = _dict_value(project_state.get("roomConfig"), _dict_value(state.get("roomConfig"), DEFAULT_ROOM_CONFIG))
+    project_layouts = _dict_value(project_state.get("layouts"), {})
+    occupied_layouts = [
+        (layout, image)
+        for image in _list_value(project_state.get("images"))
+        for layout in [project_layouts.get(image.get("id"))]
+        if isinstance(layout, dict)
+    ]
+    for stored_image in _list_value(state.get("images")):
+        if stored_image.get("id") in project_layouts:
+            continue
+        stored_origin = stored_image.get("origin") if isinstance(stored_image.get("origin"), dict) else {}
+        stored_room_index = int(stored_image.get("targetRoomIndex") or stored_origin.get("targetRoomIndex") or 0)
+        _, stored_layout = _find_available_auto_layout(
+            stored_image,
+            room_config,
+            stored_room_index,
+            occupied_layouts,
+        )
+        if stored_layout is not None:
+            occupied_layouts.append((stored_layout, stored_image))
+
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+
+        fingerprint = _fingerprint(image)
+        if respect_dedupe_setting and settings.get("dedupeGenerated", True) and fingerprint in existing:
+            skipped += 1
+            continue
+
+        source = _source_path(image)
+        if source is None:
+            skipped += 1
+            continue
+
+        width, height = _image_size(source)
+        preview = {
+            "width": width,
+            "height": height,
+        }
+        assigned_room_index, layout = _find_available_auto_layout(
+            preview,
+            room_config,
+            target_room_index,
+            occupied_layouts,
+        )
+        if assigned_room_index is None or layout is None:
+            full += 1
+            continue
+
+        record = _record_for_file(
+            source,
+            original_name=image.get("filename"),
+            origin={
+                "kind": "comfyui-generated",
+                "fingerprint": fingerprint,
+                "filename": image.get("filename"),
+                "subfolder": image.get("subfolder", ""),
+                "type": image.get("type", "output"),
+                "targetRoomIndex": assigned_room_index,
+            },
+        )
+        record["targetRoomIndex"] = assigned_room_index
+        state["images"].insert(0, record)
+        occupied_layouts.append((layout, record))
+        existing.add(fingerprint)
+        imported.append(record)
+
+    if imported:
+        _save_state(state)
+
+    return {
+        "ok": True,
+        "imported": imported,
+        "skipped": skipped,
+        "full": full,
+        "message": "所有房间都已挂满，新的生成图没有自动加入画廊" if full else "",
+    }
+
+
+def _safe_filename_prefix(value: str) -> str:
+    cleaned = "".join(char if char.isalnum() or char in {"_", "-", "."} else "_" for char in value.strip())
+    return cleaned.strip("._-") or "ImageHangGallery"
+
+
+def _save_tensor_images(images: Any, filename_prefix: str) -> list[dict[str, str]]:
+    output_dir = Path(folder_paths.get_output_directory())
+    output_dir.mkdir(parents=True, exist_ok=True)
+    prefix = _safe_filename_prefix(filename_prefix)
+    stamp = time.strftime("%Y%m%d%H%M%S")
+    saved: list[dict[str, str]] = []
+
+    for index, image in enumerate(images, start=1):
+        array = 255.0 * image.detach().cpu().numpy()
+        array = np.clip(array, 0, 255).astype(np.uint8)
+        pil_image = Image.fromarray(array)
+        filename = f"{prefix}_{stamp}_{index:05}.png"
+        path = output_dir / filename
+        if path.exists():
+            filename = f"{prefix}_{stamp}_{index:05}_{uuid.uuid4().hex[:8]}.png"
+            path = output_dir / filename
+        pil_image.save(path)
+        saved.append({"filename": filename, "subfolder": "", "type": "output"})
+
+    return saved
+
+
+class ImageHangGalleryOutput:
+    CATEGORY = "image/gallery"
+    FUNCTION = "save_to_gallery"
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("images", "gallery_info")
+    OUTPUT_NODE = True
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "filename_prefix": ("STRING", {"default": "PromptBridge_ImageHang_Gallery_Showcase"}),
+                "target_room_index": ("INT", {"default": 0, "min": 0, "max": 99, "step": 1}),
+                "open_viewer": ("BOOLEAN", {"default": False}),
+                "respect_dedupe_setting": ("BOOLEAN", {"default": False}),
+            }
+        }
+
+    def save_to_gallery(
+        self,
+        images: Any,
+        filename_prefix: str,
+        target_room_index: int,
+        open_viewer: bool,
+        respect_dedupe_setting: bool,
+    ):
+        saved = _save_tensor_images(images, filename_prefix)
+        import_result = _import_generated_image_records(
+            saved,
+            int(target_room_index),
+            respect_dedupe_setting=bool(respect_dedupe_setting),
+        )
+        viewer_url = ""
+        if open_viewer:
+            try:
+                viewer_url = _launch_viewer_url()
+            except Exception as error:
+                viewer_url = f"启动画廊失败：{error}"
+
+        imported = len(import_result.get("imported", []))
+        skipped = int(import_result.get("skipped", 0) or 0)
+        full = int(import_result.get("full", 0) or 0)
+        info = f"已送入 Image Hang Gallery：{imported} 张"
+        if skipped:
+            info += f"，跳过 {skipped} 张"
+        if full:
+            info += f"，挂满 {full} 张"
+        if viewer_url:
+            info += f"，画廊：{viewer_url}"
+
+        return {
+            "ui": {"images": saved},
+            "result": (images, info),
+        }
+
+
+NODE_CLASS_MAPPINGS = {
+    "ImageHangGalleryOutput": ImageHangGalleryOutput,
+    "图片挂画廊输出": ImageHangGalleryOutput,
+}
+
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "ImageHangGalleryOutput": "Image Hang Gallery Output",
+    "图片挂画廊输出": "Image Hang Gallery Output",
+}
+
+
 @PromptServer.instance.routes.get("/image-hang-gallery/state")
 async def get_state(request: web.Request) -> web.Response:
     state = _load_state()
@@ -958,99 +1151,7 @@ async def import_generated(request: web.Request) -> web.Response:
     body = await request.json()
     images = body.get("images", []) if isinstance(body, dict) else []
     target_room_index = int(body.get("targetRoomIndex", 0)) if isinstance(body, dict) else 0
-    state = _load_state()
-    settings = state.get("settings", DEFAULT_SETTINGS)
-    existing = {
-        item.get("origin", {}).get("fingerprint")
-        for item in state.get("images", [])
-        if item.get("origin", {}).get("fingerprint")
-    }
-    imported: list[dict[str, Any]] = []
-    skipped = 0
-    full = 0
-    project_root = _project_root()
-    project_state = _load_project_gallery_state(project_root) if project_root else {}
-    room_config = _dict_value(project_state.get("roomConfig"), _dict_value(state.get("roomConfig"), DEFAULT_ROOM_CONFIG))
-    project_layouts = _dict_value(project_state.get("layouts"), {})
-    occupied_layouts = [
-        (layout, image)
-        for image in _list_value(project_state.get("images"))
-        for layout in [project_layouts.get(image.get("id"))]
-        if isinstance(layout, dict)
-    ]
-    for stored_image in _list_value(state.get("images")):
-        if stored_image.get("id") in project_layouts:
-            continue
-        stored_origin = stored_image.get("origin") if isinstance(stored_image.get("origin"), dict) else {}
-        stored_room_index = int(stored_image.get("targetRoomIndex") or stored_origin.get("targetRoomIndex") or 0)
-        _, stored_layout = _find_available_auto_layout(
-            stored_image,
-            room_config,
-            stored_room_index,
-            occupied_layouts,
-        )
-        if stored_layout is not None:
-            occupied_layouts.append((stored_layout, stored_image))
-
-    for image in images:
-        if not isinstance(image, dict):
-            continue
-
-        fingerprint = _fingerprint(image)
-        if settings.get("dedupeGenerated", True) and fingerprint in existing:
-            skipped += 1
-            continue
-
-        source = _source_path(image)
-        if source is None:
-            skipped += 1
-            continue
-
-        width, height = _image_size(source)
-        preview = {
-            "width": width,
-            "height": height,
-        }
-        assigned_room_index, layout = _find_available_auto_layout(
-            preview,
-            room_config,
-            target_room_index,
-            occupied_layouts,
-        )
-        if assigned_room_index is None or layout is None:
-            full += 1
-            continue
-
-        record = _record_for_file(
-            source,
-            original_name=image.get("filename"),
-            origin={
-                "kind": "comfyui-generated",
-                "fingerprint": fingerprint,
-                "filename": image.get("filename"),
-                "subfolder": image.get("subfolder", ""),
-                "type": image.get("type", "output"),
-                "targetRoomIndex": assigned_room_index,
-            },
-        )
-        record["targetRoomIndex"] = assigned_room_index
-        state["images"].insert(0, record)
-        occupied_layouts.append((layout, record))
-        existing.add(fingerprint)
-        imported.append(record)
-
-    if imported:
-        _save_state(state)
-
-    return _json_response(
-        {
-            "ok": True,
-            "imported": imported,
-            "skipped": skipped,
-            "full": full,
-            "message": "所有房间都已挂满，新的生成图没有自动加入画廊" if full else "",
-        }
-    )
+    return _json_response(_import_generated_image_records(images, target_room_index))
 
 
 @PromptServer.instance.routes.delete("/image-hang-gallery/image/{image_id}")
